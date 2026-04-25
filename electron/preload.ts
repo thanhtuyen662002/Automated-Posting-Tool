@@ -1,34 +1,23 @@
-import { ipcRenderer, contextBridge } from 'electron'
+const { ipcRenderer, contextBridge } = require('electron')
 
 // --------- Expose some API to the Renderer process ---------
 contextBridge.exposeInMainWorld('ipcRenderer', {
-  on(channel: string, listener: (event: any, ...args: any[]) => void) {
-    const wrappedListener = (event: any, ...args: any[]) => listener(event, ...args)
-    ipcRenderer.on(channel, wrappedListener)
-    return () => ipcRenderer.removeListener(channel, wrappedListener)
-  },
-  off(...args: Parameters<typeof ipcRenderer.off>) {
-    const [channel, listener] = args
-    return ipcRenderer.off(channel, listener)
-  },
-  send(...args: Parameters<typeof ipcRenderer.send>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.send(channel, ...omit)
-  },
-  invoke(...args: Parameters<typeof ipcRenderer.invoke>) {
-    const [channel, ...omit] = args
-    return ipcRenderer.invoke(channel, ...omit)
-  },
-
-  // Custom APIs for the app
+  // Typed/whitelisted APIs only (no generic channel access).
   getProjects: () => ipcRenderer.invoke('db:get-projects'),
-  addProject: (name: string, platforms: string[]) => ipcRenderer.invoke('db:add-project', name, platforms),
-  updateProject: (id: number, name: string, platforms: string[]) => ipcRenderer.invoke('db:update-project', { id, name, platforms }),
+  addProject: (name: string, platforms: string[], aiConfig?: any) => ipcRenderer.invoke('db:add-project', name, platforms, aiConfig),
+  updateProject: (id: number, name: string, platforms: string[], aiConfig?: any) => ipcRenderer.invoke('db:update-project', { id, name, platforms, aiConfig }),
   deleteProject: (id: number) => ipcRenderer.invoke('db:delete-project', id),
   
   getPages: (projectId?: number) => ipcRenderer.invoke('db:get-pages', projectId),
   addPage: (data: any) => ipcRenderer.invoke('db:add-page', data),
+  updatePage: (id: number, data: any) => ipcRenderer.invoke('db:update-page', { id, data }),
   deletePage: (id: number) => ipcRenderer.invoke('db:delete-page', id),
+
+  getAccounts: (projectId?: number) => ipcRenderer.invoke('db:get-accounts', projectId),
+  addAccount: (data: any) => ipcRenderer.invoke('db:add-account', data),
+  updateAccount: (id: number, data: any) => ipcRenderer.invoke('db:update-account', { id, data }),
+  deleteAccount: (id: number) => ipcRenderer.invoke('db:delete-account', id),
+  updateAccountLoginStatus: (id: number, status: number) => ipcRenderer.invoke('db:update-account-login-status', { id, status }),
 
   getPosts: (projectId?: number) => ipcRenderer.invoke('db:get-posts', projectId),
   addPost: (data: any) => ipcRenderer.invoke('db:add-post', data),
@@ -55,9 +44,12 @@ contextBridge.exposeInMainWorld('ipcRenderer', {
   getContentGroups: (projectId?: number) => ipcRenderer.invoke('db:get-content-groups', projectId),
   addContentGroup: (data: any) => ipcRenderer.invoke('db:add-content-group', data),
   deleteContentGroup: (id: number) => ipcRenderer.invoke('db:delete-content-group', id),
-  generatePost: (data: { promptId: number; keyword: string }) => ipcRenderer.invoke('ai:generate-post', data),
+  generatePost: (data: { promptId: number; keyword: string; projectId?: number; productId?: number }) => ipcRenderer.invoke('ai:generate-post', data),
   generateCTA: (data: { promptId: number; productId?: number; postContext?: any }) => ipcRenderer.invoke('ai:generate-cta', data),
-  analyzeMedia: (filePath: string) => ipcRenderer.invoke('ai:analyze-media', filePath),
+  analyzeMedia: (data: { filePath: string; projectId?: number }) => ipcRenderer.invoke('ai:analyze-media', data),
+  getBatchPrompt: () => ipcRenderer.invoke('ai:get-batch-prompt'),
+  saveBatchPrompt: (prompt: string) => ipcRenderer.invoke('ai:save-batch-prompt', prompt),
+  generateBatchPosts: (payload: any) => ipcRenderer.invoke('ai:generate-batch-posts', payload),
 
   getScheduleSettings: (projectId: number) => ipcRenderer.invoke('db:get-schedule-settings', projectId),
   saveScheduleSettings: (data: any) => ipcRenderer.invoke('db:save-schedule-settings', data),
@@ -72,11 +64,17 @@ contextBridge.exposeInMainWorld('ipcRenderer', {
     ipcRenderer.on('engine:log', subscription)
     return () => ipcRenderer.removeListener('engine:log', subscription)
   },
+  onEngineFrame: (callback: (payload: { jobId: number; frame: string }) => void) => {
+    const subscription = (_event: any, payload: { jobId: number; frame: string }) => callback(payload)
+    ipcRenderer.on('engine:frame', subscription)
+    return () => ipcRenderer.removeListener('engine:frame', subscription)
+  },
 
   checkHealthAll: () => ipcRenderer.invoke('browser:check-health-all'),
   checkHealthSingle: (pageId: number) => ipcRenderer.invoke('browser:check-health-single', pageId),
+  syncPageInfo: (pageId: number) => ipcRenderer.invoke('automation:sync-page-info', pageId),
   
-  launchBrowser: (pageId: number) => ipcRenderer.invoke('browser:launch', pageId),
+  launchBrowser: (accountId: number) => ipcRenderer.invoke('browser:launch', accountId),
   runPost: (pageId: number, postId: number) => ipcRenderer.invoke('automation:run-post', { pageId, postId }),
     onBrowserClosed: (callback: (pageId: number) => void) => {
     const listener = (_: any, pageId: number) => callback(pageId)

@@ -40,6 +40,8 @@ function App() {
         return <PromptsView />
       case 'products':
         return <ProductsView />
+      case 'settings':
+        return <AIConfigView />
       default:
         return <Dashboard />
     }
@@ -85,6 +87,14 @@ function App() {
               </div>
             </div>
           </header>
+
+          {/* IPC Missing Warning */}
+          {!window.ipcRenderer && (
+            <div className="bg-red-500/10 border-b border-red-500/20 text-red-600 p-3 text-center text-xs font-bold flex items-center justify-center gap-2 shrink-0 z-10 relative">
+                <HelpCircle className="w-4 h-4" />
+                <span>CẢNH BÁO: Bộ xử lý hệ thống (IPC) đang tắt. Có vẻ bạn đang mở ứng dụng trong trình duyệt Web thông thường (như Chrome/Edge) thay vì chạy phần mềm AutoPost Pro. Robot và dữ liệu sẽ không hoạt động.</span>
+            </div>
+          )}
 
           {/* Content Area */}
           <div className="flex-1 overflow-y-auto p-8 lg:px-12">

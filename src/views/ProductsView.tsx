@@ -6,9 +6,7 @@ import {
     Trash2, 
     ChevronRight, 
     Image as ImageIcon,
-    ShoppingBag,
     Globe,
-    MessageCircle,
     Link2
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
@@ -17,6 +15,11 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from 'sonner'
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog'
+
+// Brand Assets
+import shopeeLogo from '@/assets/shopee.svg'
+import zaloLogo from '@/assets/zalo.svg'
+
 
 export const ProductsView: React.FC = () => {
     const [products, setProducts] = useState<any[]>([])
@@ -125,7 +128,7 @@ export const ProductsView: React.FC = () => {
                         onChange={(e) => setSearchQuery(e.target.value)}
                     />
                 </div>
-                <Select value={filterProjectId} onValueChange={setFilterProjectId}>
+                <Select value={filterProjectId} onValueChange={(v) => v && setFilterProjectId(v)}>
                     <SelectTrigger className="w-[200px] h-11 bg-surface-lowest border-none rounded-xl font-bold text-[10px] uppercase tracking-widest">
                         <SelectValue placeholder="Dự án: Tất cả" />
                     </SelectTrigger>
@@ -168,11 +171,20 @@ export const ProductsView: React.FC = () => {
                                     {projects.find(pj => pj.id === p.project_id)?.name || 'Dự án'}
                                 </div>
                                 <h3 className="text-lg font-bold leading-tight truncate">{p.name}</h3>
-                                <div className="flex items-center gap-2 mt-2">
-                                    {p.shopee_link && <ShoppingBag className="w-3.5 h-3.5 text-orange-500" />}
-                                    {p.web_link && <Globe className="w-3.5 h-3.5 text-blue-500" />}
-                                    {p.zalo_link && <MessageCircle className="w-3.5 h-3.5 text-sky-500" />}
+                                <div className="flex items-center gap-3 mt-2">
+                                    {p.shopee_link && (
+                                        <div className="w-6 h-6 p-1 bg-surface-low rounded-lg shadow-sm border border-border/5">
+                                            <img src={shopeeLogo} className="w-full h-full object-contain" />
+                                        </div>
+                                    )}
+                                    {p.zalo_link && (
+                                        <div className="w-6 h-6 p-1 bg-surface-low rounded-lg shadow-sm border border-border/5">
+                                            <img src={zaloLogo} className="w-full h-full object-contain" />
+                                        </div>
+                                    )}
+                                    {p.web_link && <Globe className="w-4 h-4 text-primary/40" />}
                                 </div>
+
                             </div>
                         </div>
 
@@ -227,7 +239,7 @@ export const ProductsView: React.FC = () => {
                                 <div className="col-span-1 space-y-4">
                                     <div className="space-y-2">
                                         <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/80 ml-1">Lược thuộc Dự án</label>
-                                        <Select value={formData.project_id} onValueChange={(v) => setFormData({...formData, project_id: v})}>
+                                        <Select value={formData.project_id} onValueChange={(v) => v && setFormData({...formData, project_id: v})}>
                                             <SelectTrigger className="w-full h-11 bg-surface-container-low border-none rounded-xl">
                                                 <SelectValue placeholder="Chọn dự án...">
                                                     {projects.find(p => p.id.toString() === formData.project_id)?.name}

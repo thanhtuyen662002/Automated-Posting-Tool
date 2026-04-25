@@ -10,6 +10,21 @@ export interface PlatformHandler {
     postData: any,
     logger: (msg: string) => void
   ): Promise<void>
+  postCommentCTA?(
+    page: Page,
+    commentText: string,
+    logger: (msg: string) => void
+  ): Promise<void>
+  switchPage?(
+    page: Page,
+    pageUrl: string | null | undefined,
+    logger: (msg: string) => void
+  ): Promise<void>
+  syncPageInfo?(
+    page: Page,
+    logger: (msg: string) => void,
+    dbPage?: any
+  ): Promise<{ handle?: string, avatarUrl?: string, pageName?: string }>
 }
 
 export class PlatformFactory {

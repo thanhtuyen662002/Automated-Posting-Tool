@@ -17,7 +17,26 @@ export default defineConfig({
         vite: {
           build: {
             rollupOptions: {
-              external: ['better-sqlite3', 'playwright', 'playwright-core'],
+              external: [
+                'better-sqlite3', 
+                'playwright', 
+                'playwright-core',
+                'fluent-ffmpeg',
+                'ffmpeg-static',
+                'node:module',
+                'node:path',
+                'node:fs',
+                'node:url',
+                'node:crypto',
+                'node:events',
+                'node:stream',
+                'node:http',
+                'node:https',
+                'node:util'
+              ],
+              output: {
+                banner: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url); globalThis.require = require;"
+              }
             },
           },
         },
@@ -27,16 +46,37 @@ export default defineConfig({
         onstart(options) {
           options.reload()
         },
+        vite: {
+          build: {
+            rollupOptions: {
+              output: {
+                format: 'cjs',
+                entryFileNames: '[name].cjs'
+              }
+            }
+          }
+        }
       },
     ]),
     renderer(),
   ],
+  server: {
+    watch: {
+      ignored: ['**/data.db*', '**/browser_profiles/**'],
+    },
+  },
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
     },
   },
   optimizeDeps: {
-    exclude: ['better-sqlite3', 'playwright', 'playwright-core']
+    exclude: [
+      'better-sqlite3', 
+      'playwright', 
+      'playwright-core',
+      'fluent-ffmpeg',
+      'ffmpeg-static'
+    ]
   }
 })

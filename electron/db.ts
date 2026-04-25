@@ -2,6 +2,8 @@ import Database from 'better-sqlite3'
 import path from 'node:path'
 import { app } from 'electron'
 import { existsSync, mkdirSync } from 'node:fs'
+import crypto from 'node:crypto'
+import { POST_STATUS, PostStatus, normalizePostStatus } from './post_status'
 
 const isDev = !app.isPackaged
 const dbPath = isDev 
@@ -16,20 +18,41 @@ db.pragma('foreign_keys = ON')
 db.exec(`
   CREATE TABLE IF NOT EXISTS projects (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
-    name       TEXT    UNIQUE NOT NULL,
+    name       TEXT    UNIQUE,
     platforms  TEXT    DEFAULT '[]',
+    ai_config  TEXT    DEFAULT '{"provider":"google","model":"gemini-1.5-flash"}',
+    watermark_config TEXT DEFAULT '{"position":"top-right","size":0.12,"margin":20,"opacity":0.8,"showText":true}',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS accounts (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id   INTEGER, -- Nullable for global accounts
+    platform     TEXT    NOT NULL,
+    account_name TEXT    NOT NULL,
+    profile_dir  TEXT,
+    is_logged_in INTEGER DEFAULT 0,
+    proxy        TEXT    DEFAULT '',
+    proxy_type   TEXT    DEFAULT 'static', -- none, static, tmproxy, tinproxy
+    created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
   );
 
   CREATE TABLE IF NOT EXISTS pages (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id   INTEGER NOT NULL,
+    account_id   INTEGER,
     platform     TEXT    NOT NULL,
     page_name    TEXT    NOT NULL,
     page_url     TEXT,
+    handle       TEXT, -- e.g. @thanhtuyen
+    avatar_url   TEXT, -- local path or remote URL
     profile_dir  TEXT,
     is_logged_in INTEGER DEFAULT 0,
-    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+    proxy        TEXT    DEFAULT '',
+    proxy_type   TEXT    DEFAULT 'static', -- none, static, tmproxy, tinproxy
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE SET NULL
   );
 
   CREATE TABLE IF NOT EXISTS posts (
@@ -39,8 +62,12 @@ db.exec(`
     title        TEXT,
     content      TEXT,
     media_path   TEXT,
-    status       TEXT    DEFAULT 'pending', -- pending, scheduled, completed, failed
+    status       TEXT    DEFAULT 'draft', -- draft, approved, scheduled, processing, published, failed
     scheduled_at TIMESTAMP,
+    processing_started_at TIMESTAMP,
+    idempotency_key TEXT,
+    attempts INTEGER DEFAULT 0,
+    last_error TEXT,
     comment_cta  TEXT,
     shopee_link  TEXT,
     created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -56,6 +83,18 @@ try {
 
 try {
   db.exec("ALTER TABLE posts ADD COLUMN shopee_link TEXT");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE posts ADD COLUMN processing_started_at TIMESTAMP");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE posts ADD COLUMN idempotency_key TEXT");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE posts ADD COLUMN attempts INTEGER DEFAULT 0");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE posts ADD COLUMN last_error TEXT");
 } catch (e) {}
 
 try {
@@ -73,6 +112,111 @@ try {
 try {
   db.exec("ALTER TABLE schedule_settings ADD COLUMN max_posts_per_day INTEGER DEFAULT 3");
 } catch (e) {}
+
+try {
+  db.exec("ALTER TABLE projects ADD COLUMN ai_config TEXT DEFAULT '{\"provider\":\"google\",\"model\":\"gemini-1.5-flash\"}'");
+} catch (e) {}
+
+try {
+  db.exec("ALTER TABLE pages ADD COLUMN account_id INTEGER");
+} catch (e) {}
+
+try {
+  db.exec("ALTER TABLE pages ADD COLUMN handle TEXT");
+} catch (e) {}
+
+try {
+  db.exec("ALTER TABLE pages ADD COLUMN avatar_url TEXT");
+} catch (e) {}
+try {
+  db.exec("CREATE INDEX IF NOT EXISTS idx_posts_status_scheduled ON posts(status, scheduled_at)");
+  db.exec("CREATE INDEX IF NOT EXISTS idx_posts_idempotency_key ON posts(idempotency_key)");
+} catch (e) {}
+try {
+  // Normalize legacy statuses to unified state machine
+  db.exec(`
+    UPDATE posts SET status = 'processing' WHERE status IN ('in-progress');
+    UPDATE posts SET status = 'published' WHERE status IN ('completed');
+    UPDATE posts SET status = 'draft' WHERE status IN ('pending');
+    UPDATE posts SET status = 'failed' WHERE status NOT IN ('draft','approved','scheduled','processing','published','failed');
+  `)
+} catch (e) {}
+
+try {
+  db.exec("ALTER TABLE posts ADD COLUMN post_url TEXT");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE posts ADD COLUMN comment_status TEXT DEFAULT 'pending'");
+} catch (e) {}
+try {
+  db.exec("ALTER TABLE posts ADD COLUMN comment_error TEXT");
+} catch (e) {}
+try {
+  // Post-migration: if no comment_cta, set status to none
+  db.exec("UPDATE posts SET comment_status = 'none' WHERE comment_cta IS NULL OR comment_cta = ''");
+} catch (e) {}
+
+// Migration for project-agnostic accounts
+try {
+  const tableInfo = db.prepare("PRAGMA table_info(accounts)").all() as any[]
+  const projectIdInfo = tableInfo.find(c => c.name === 'project_id')
+  if (projectIdInfo && projectIdInfo.notnull === 1) {
+    console.log('[DB Migration] Removing NOT NULL constraint from accounts.project_id...')
+    db.exec(`
+      PRAGMA foreign_keys=OFF;
+      BEGIN TRANSACTION;
+      CREATE TABLE accounts_new (
+        id           INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id   INTEGER,
+        platform     TEXT    NOT NULL,
+        account_name TEXT    NOT NULL,
+        profile_dir  TEXT,
+        is_logged_in INTEGER DEFAULT 0,
+        proxy        TEXT    DEFAULT '',
+        proxy_type   TEXT    DEFAULT 'static',
+        created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+      );
+      INSERT INTO accounts_new SELECT * FROM accounts;
+      DROP TABLE accounts;
+      ALTER TABLE accounts_new RENAME TO accounts;
+      COMMIT;
+      PRAGMA foreign_keys=ON;
+    `)
+  }
+} catch (e) {
+  console.error('[DB Migration Error] Making project_id nullable failed:', e)
+}
+
+// Migration script: Move page profile/proxy info to accounts
+try {
+  const pagesWithoutAccount = db.prepare("SELECT * FROM pages WHERE account_id IS NULL").all() as any[]
+  if (pagesWithoutAccount.length > 0) {
+    console.log(`[DB Migration] Moving ${pagesWithoutAccount.length} pages to account-centric model...`)
+    for (const p of pagesWithoutAccount) {
+      // 1. Create a dummy account for each existing page to preserve its settings
+      const info = db.prepare(`
+        INSERT INTO accounts (project_id, platform, account_name, profile_dir, is_logged_in, proxy, proxy_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        p.project_id, 
+        p.platform, 
+        p.page_name, // Use page name as account name for migration
+        p.profile_dir, 
+        p.is_logged_in, 
+        p.proxy || '', 
+        p.proxy_type || 'static'
+      )
+      
+      const accountId = info.lastInsertRowid
+      
+      // 2. Link page to the new account
+      db.prepare("UPDATE pages SET account_id = ? WHERE id = ?").run(accountId, p.id)
+    }
+  }
+} catch (e) {
+  console.error('[DB Migration Error] Migrating pages to accounts failed:', e)
+}
 
 db.exec(`
 
@@ -162,20 +306,40 @@ export interface Project {
   id: number
   name: string
   platforms: string // JSON string
+  ai_config: string // JSON string {"provider": string, "model": string}
   created_at: string
   // Virtual fields
   pages_count?: number
   posts_count?: number
 }
 
-export interface Page {
+export interface Account {
   id: number
   project_id: number
   platform: string
-  page_name: string
-  page_url: string
+  account_name: string
   profile_dir: string
   is_logged_in: number
+  proxy: string
+  proxy_type: string
+  created_at: string
+}
+
+export interface Page {
+  id: number
+  project_id: number
+  account_id: number
+  platform: string
+  page_name: string
+  page_url: string
+  handle?: string
+  avatar_url?: string
+  profile_dir?: string
+  is_logged_in?: number
+  proxy?: string
+  proxy_type?: string
+  cookies?: string
+  user_agent?: string
 }
 
 export interface Post {
@@ -185,11 +349,14 @@ export interface Post {
   title: string
   content: string
   media_path: string
-  status: 'pending' | 'scheduled' | 'processing' | 'published' | 'failed'
+  status: PostStatus
   scheduled_at: string
   comment_cta: string
   shopee_link: string
   created_at: string
+  post_url?: string
+  comment_status?: string
+  comment_error?: string
 }
 
 export interface ScheduleSettings {
@@ -211,15 +378,54 @@ export const dbService = {
       ORDER BY created_at DESC
     `).all() as Project[]
   },
-  addProject(name: string, platforms: string[] = []) {
-    const info = db.prepare('INSERT INTO projects (name, platforms) VALUES (?, ?)').run(name, JSON.stringify(platforms))
+  addProject(name: string, platforms: string[] = [], aiConfig?: any) {
+    const config = aiConfig || { provider: 'google', model: 'gemini-1.5-flash' }
+    const info = db.prepare('INSERT INTO projects (name, platforms, ai_config) VALUES (?, ?, ?)').run(name, JSON.stringify(platforms), JSON.stringify(config))
     return db.prepare('SELECT * FROM projects WHERE id = ?').get(info.lastInsertRowid)
   },
-  updateProject(id: number, name: string, platforms: string[]) {
+  updateProject(id: number, name: string, platforms: string[], aiConfig?: any) {
+    if (aiConfig) {
+      return db.prepare('UPDATE projects SET name = ?, platforms = ?, ai_config = ? WHERE id = ?').run(name, JSON.stringify(platforms), JSON.stringify(aiConfig), id)
+    }
     return db.prepare('UPDATE projects SET name = ?, platforms = ? WHERE id = ?').run(name, JSON.stringify(platforms), id)
   },
   deleteProject(id: number) {
     return db.prepare('DELETE FROM projects WHERE id = ?').run(id)
+  },
+
+  // Accounts
+  getAccounts(projectId?: number): Account[] {
+    if (projectId) {
+      return db.prepare('SELECT * FROM accounts WHERE project_id = ? OR project_id IS NULL ORDER BY created_at DESC').all(projectId) as Account[]
+    }
+    return db.prepare('SELECT * FROM accounts ORDER BY created_at DESC').all() as Account[]
+  },
+  addAccount(data: any) {
+    const { project_id, platform, account_name, profile_dir, proxy, proxy_type } = data
+    // Convert empty string or 0 to null for global accounts
+    const pid = (project_id === '' || project_id === '0' || project_id === 0) ? null : Number(project_id)
+    
+    const info = db.prepare(`
+      INSERT INTO accounts (project_id, platform, account_name, profile_dir, proxy, proxy_type)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(pid, platform, account_name, profile_dir, proxy || '', proxy_type || 'static')
+    return db.prepare('SELECT * FROM accounts WHERE id = ?').get(info.lastInsertRowid)
+  },
+  updateAccount(id: number, data: any) {
+    const { project_id, platform, account_name, profile_dir, proxy, proxy_type } = data
+    const pid = (project_id === '' || project_id === '0' || project_id === 0) ? null : Number(project_id)
+    
+    return db.prepare(`
+      UPDATE accounts 
+      SET project_id = ?, platform = ?, account_name = ?, profile_dir = ?, proxy = ?, proxy_type = ? 
+      WHERE id = ?
+    `).run(pid, platform, account_name, profile_dir, proxy || '', proxy_type || 'static', id)
+  },
+  deleteAccount(id: number) {
+    return db.prepare('DELETE FROM accounts WHERE id = ?').run(id)
+  },
+  updateAccountLoginStatus(id: number, status: number) {
+    return db.prepare('UPDATE accounts SET is_logged_in = ? WHERE id = ?').run(status, id)
   },
 
   // Pages
@@ -230,15 +436,23 @@ export const dbService = {
     return db.prepare('SELECT * FROM pages').all() as Page[]
   },
   addPage(data: any) {
-    const { project_id, platform, page_name, page_url, profile_dir } = data
+    const { project_id, account_id, platform, page_name, page_url, handle, avatar_url } = data
     const info = db.prepare(`
-      INSERT INTO pages (project_id, platform, page_name, page_url, profile_dir)
-      VALUES (?, ?, ?, ?, ?)
-    `).run(project_id, platform, page_name, page_url, profile_dir)
+      INSERT INTO pages (project_id, account_id, platform, page_name, page_url, handle, avatar_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).run(project_id, account_id, platform, page_name, page_url, handle, avatar_url)
     return db.prepare('SELECT * FROM pages WHERE id = ?').get(info.lastInsertRowid)
   },
   deletePage(id: number) {
     return db.prepare('DELETE FROM pages WHERE id = ?').run(id)
+  },
+  updatePage(id: number, data: any) {
+    const { project_id, account_id, platform, page_name, page_url, handle, avatar_url } = data
+    return db.prepare(`
+      UPDATE pages 
+      SET project_id = ?, account_id = ?, platform = ?, page_name = ?, page_url = ?, handle = ?, avatar_url = ? 
+      WHERE id = ?
+    `).run(project_id, account_id, platform, page_name, page_url, handle, avatar_url, id)
   },
   updatePageLoginStatus(id: number, status: number) {
     return db.prepare('UPDATE pages SET is_logged_in = ? WHERE id = ?').run(status, id)
@@ -251,33 +465,84 @@ export const dbService = {
     }
     return db.prepare('SELECT * FROM posts ORDER BY created_at DESC').all() as Post[]
   },
+  getPostById(id: number): Post | undefined {
+    return db.prepare('SELECT * FROM posts WHERE id = ? LIMIT 1').get(id) as Post | undefined
+  },
+  getPostsByIds(ids: number[]): Post[] {
+    if (!ids.length) return []
+    const placeholders = ids.map(() => '?').join(',')
+    return db.prepare(`SELECT * FROM posts WHERE id IN (${placeholders})`).all(...ids) as Post[]
+  },
+  getDueScheduledPosts(nowIso: string): Post[] {
+    return db.prepare(`
+      SELECT * FROM posts
+      WHERE status = 'scheduled'
+        AND scheduled_at IS NOT NULL
+        AND scheduled_at <= ?
+      ORDER BY scheduled_at ASC
+    `).all(nowIso) as Post[]
+  },
   getPendingPosts() {
-    return db.prepare("SELECT * FROM posts WHERE status = 'pending' OR status = 'scheduled' ORDER BY scheduled_at ASC").all()
+    return db.prepare("SELECT * FROM posts WHERE status IN ('approved', 'scheduled') ORDER BY scheduled_at ASC").all()
+  },
+  buildPostIdempotencyKey(data: any): string {
+    const raw = `${data.page_id || ''}|${data.media_path || ''}|${data.scheduled_at || ''}|${data.title || ''}`
+    return crypto.createHash('sha256').update(raw).digest('hex')
   },
   addPost(data: any) {
     const { project_id, page_id, title, content, media_path, scheduled_at, comment_cta, shopee_link } = data
+    const normalizedStatus = normalizePostStatus(data.status)
+    const idempotencyKey = this.buildPostIdempotencyKey({ page_id, media_path, scheduled_at, title })
     const info = db.prepare(`
-      INSERT INTO posts (project_id, page_id, title, content, media_path, scheduled_at, comment_cta, shopee_link)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(project_id, page_id, title, content, media_path, scheduled_at, comment_cta, shopee_link)
+      INSERT INTO posts (project_id, page_id, title, content, media_path, status, scheduled_at, comment_cta, shopee_link, idempotency_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(project_id, page_id, title, content, media_path, normalizedStatus, scheduled_at, comment_cta, shopee_link, idempotencyKey)
     return db.prepare('SELECT * FROM posts WHERE id = ?').get(info.lastInsertRowid)
   },
-  updatePostStatus(id: number, status: string) {
-    return db.prepare('UPDATE posts SET status = ? WHERE id = ?').run(status, id)
+  updatePostStatus(id: number, status: string, errorMessage?: string) {
+    const normalizedStatus = normalizePostStatus(status)
+    if (normalizedStatus === POST_STATUS.PROCESSING) {
+      return db.prepare('UPDATE posts SET status = ?, processing_started_at = CURRENT_TIMESTAMP, attempts = attempts + 1 WHERE id = ?')
+        .run(normalizedStatus, id)
+    }
+    if (normalizedStatus === POST_STATUS.FAILED) {
+      return db.prepare('UPDATE posts SET status = ?, last_error = ?, processing_started_at = NULL WHERE id = ?')
+        .run(normalizedStatus, errorMessage || null, id)
+    }
+    return db.prepare('UPDATE posts SET status = ?, processing_started_at = NULL WHERE id = ?').run(normalizedStatus, id)
   },
   deletePost(id: number) {
     return db.prepare('DELETE FROM posts WHERE id = ?').run(id)
   },
+  getPostsMissingLink(): Post[] {
+    return db.prepare("SELECT * FROM posts WHERE status = 'published' AND post_url IS NULL AND created_at > datetime('now', '-3 days')").all() as Post[]
+  },
+  getPostsPendingComment(): Post[] {
+    return db.prepare("SELECT * FROM posts WHERE status = 'published' AND post_url IS NOT NULL AND comment_status = 'pending' AND comment_cta IS NOT NULL AND comment_cta != ''").all() as Post[]
+  },
   updatePost(id: number, data: any) {
-    const { title, content, comment_cta, shopee_link, status } = data
+    const fields: string[] = []
+    const params: any[] = []
+
+    // Map các trường được phép update
+    const allowedFields = [
+      'title', 'content', 'comment_cta', 'shopee_link', 'status', 
+      'scheduled_at', 'media_path', 'page_id', 'last_error',
+      'post_url', 'comment_status', 'comment_error'
+    ]
     
-    if (status) {
-      return db.prepare('UPDATE posts SET title = ?, content = ?, comment_cta = ?, shopee_link = ?, status = ? WHERE id = ?')
-        .run(title, content, comment_cta, shopee_link, status, id)
+    for (const key of allowedFields) {
+      if (Object.prototype.hasOwnProperty.call(data, key)) {
+        fields.push(`${key} = ?`)
+        params.push(key === 'status' ? normalizePostStatus(data[key]) : data[key])
+      }
     }
-    
-    return db.prepare('UPDATE posts SET title = ?, content = ?, comment_cta = ?, shopee_link = ? WHERE id = ?')
-      .run(title, content, comment_cta, shopee_link, id)
+
+    if (fields.length === 0) return { changes: 0 }
+
+    params.push(id)
+    const sql = `UPDATE posts SET ${fields.join(', ')} WHERE id = ?`
+    return db.prepare(sql).run(...params)
   },
 
   // Scheduling (Phase 4)
@@ -296,10 +561,41 @@ export const dbService = {
     `).run(project_id, JSON.stringify(time_windows), min_interval, max_posts_per_day || 3)
   },
   getPostsByStatus(status: string): Post[] {
-    return db.prepare('SELECT * FROM posts WHERE status = ? ORDER BY created_at ASC').all(status) as Post[]
+    return db.prepare('SELECT * FROM posts WHERE status = ? ORDER BY created_at ASC').all(normalizePostStatus(status)) as Post[]
   },
-  updatePostSchedule(id: number, scheduledAt: string, status: string = 'scheduled') {
-    return db.prepare('UPDATE posts SET scheduled_at = ?, status = ? WHERE id = ?').run(scheduledAt, status, id)
+  updatePostSchedule(id: number, scheduledAt: string, status: string = POST_STATUS.SCHEDULED) {
+    const normalizedStatus = normalizePostStatus(status)
+    return db.prepare('UPDATE posts SET scheduled_at = ?, status = ?, idempotency_key = ? WHERE id = ?')
+      .run(scheduledAt, normalizedStatus, this.buildPostIdempotencyKey({ page_id: (db.prepare('SELECT page_id FROM posts WHERE id = ?').get(id) as any)?.page_id, media_path: (db.prepare('SELECT media_path FROM posts WHERE id = ?').get(id) as any)?.media_path, scheduled_at: scheduledAt, title: (db.prepare('SELECT title FROM posts WHERE id = ?').get(id) as any)?.title }), id)
+  },
+  findStuckProcessingPosts(timeoutMinutes: number) {
+    return db.prepare(`
+      SELECT * FROM posts
+      WHERE status = 'processing'
+        AND processing_started_at IS NOT NULL
+        AND datetime(processing_started_at) <= datetime('now', ?)
+    `).all(`-${timeoutMinutes} minutes`) as Post[]
+  },
+  markStuckPostsFailed(timeoutMinutes = 30) {
+    return db.prepare(`
+      UPDATE posts
+      SET status = 'failed',
+          last_error = COALESCE(last_error, 'processing_timeout'),
+          processing_started_at = NULL
+      WHERE status = 'processing'
+        AND processing_started_at IS NOT NULL
+        AND datetime(processing_started_at) <= datetime('now', ?)
+    `).run(`-${timeoutMinutes} minutes`)
+  },
+  hasIdempotencyConflict(idempotencyKey: string, exceptPostId?: number) {
+    const row = db.prepare(`
+      SELECT id FROM posts
+      WHERE idempotency_key = ?
+        AND status IN ('processing', 'published')
+        ${exceptPostId ? 'AND id != ?' : ''}
+      LIMIT 1
+    `).get(...(exceptPostId ? [idempotencyKey, exceptPostId] : [idempotencyKey])) as { id: number } | undefined
+    return Boolean(row)
   },
 
   // Content Groups (Phase 3)
@@ -378,7 +674,7 @@ export const dbService = {
     
     // Detailed post stats
     const scheduled = (db.prepare("SELECT COUNT(*) as count FROM posts WHERE status = 'scheduled'").get() as { count: number }).count
-    const pending = (db.prepare("SELECT COUNT(*) as count FROM posts WHERE status = 'pending'").get() as { count: number }).count
+    const pending = (db.prepare("SELECT COUNT(*) as count FROM posts WHERE status IN ('draft','approved')").get() as { count: number }).count
     const published = (db.prepare("SELECT COUNT(*) as count FROM posts WHERE status = 'published'").get() as { count: number }).count
     const failed = (db.prepare("SELECT COUNT(*) as count FROM posts WHERE status = 'failed'").get() as { count: number }).count
     

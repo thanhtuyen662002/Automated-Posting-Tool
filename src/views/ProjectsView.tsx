@@ -9,11 +9,6 @@ import {
   Filter,
   Globe,
   Pencil,
-  Facebook,
-  Play,
-  Instagram,
-  Zap,
-  MessageCircle,
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -21,6 +16,20 @@ import { Input } from '@/components/ui/input'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { ConfirmDeleteDialog } from '@/components/ConfirmDeleteDialog'
+import { 
+  Select, 
+  SelectContent, 
+  SelectItem, 
+  SelectTrigger, 
+  SelectValue 
+} from '@/components/ui/select'
+
+// Brand Assets
+import facebookLogo from '@/assets/facebook.svg'
+import tiktokLogo from '@/assets/tiktok.svg'
+import youtubeLogo from '@/assets/youtube.svg'
+import instagramLogo from '@/assets/instagram.svg'
+
 
 export const ProjectsView: React.FC = () => {
   const [projects, setProjects] = useState<any[]>([])
@@ -31,53 +40,30 @@ export const ProjectsView: React.FC = () => {
   const [isAddOpen, setIsAddOpen] = useState(false)
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
+  
+  // AI Config
+  const [selectedProvider, setSelectedProvider] = useState<'google' | 'qwen'>('google')
+  const [selectedModel, setSelectedModel] = useState('gemini-1.5-flash')
 
   const PLATFORMS = [
-    { id: 'Facebook', label: 'Facebook', color: 'bg-[#1877F2]', icon: Facebook },
-    { id: 'TikTok', label: 'TikTok', color: 'bg-black', icon: Zap }, // Using Zap for TikTok flavor or custom
-    { id: 'Insta', label: 'Instagram', color: 'bg-gradient-to-tr from-[#f9ce34] via-[#ee2a7b] to-[#6228d7]', icon: Instagram },
-    { id: 'Youtube', label: 'YouTube', color: 'bg-[#FF0000]', icon: Play },
-    { id: 'Zalo', label: 'Zalo', color: 'bg-[#0068FF]', icon: MessageCircle }
+    { id: 'Facebook', label: 'Facebook', color: 'bg-[#1877F2]/10', logo: facebookLogo },
+    { id: 'TikTok', label: 'TikTok', color: 'bg-black/10', logo: tiktokLogo },
+    { id: 'Instagram', label: 'Instagram', color: 'bg-gradient-to-tr from-yellow-400/10 via-red-500/10 to-purple-600/10', logo: instagramLogo },
+    { id: 'YouTube', label: 'YouTube', color: 'bg-[#FF0000]/10', logo: youtubeLogo }
   ]
 
+
   const PlatformIcon = ({ id, className }: { id: string, className?: string }) => {
-    switch (id) {
-        case 'Facebook':
-            return (
-                <div className={cn("w-5 h-5 bg-[#1877F2] rounded-full flex items-center justify-center text-white", className)}>
-                    <Facebook className="w-3 h-3 fill-current" />
-                </div>
-            )
-        case 'TikTok':
-            return (
-                <div className={cn("w-5 h-5 bg-black rounded-full flex items-center justify-center", className)}>
-                    <svg viewBox="0 0 24 24" className="w-3 h-3 fill-white">
-                        <path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.17-2.89-.6-4.13-1.47V18.77a6.738 6.738 0 01-6.74 6.74c-1.4-.04-2.79-.45-3.99-1.18a6.704 6.704 0 01-2.4-2.35 6.748 6.748 0 01-.35-6.19c.33-1 1-1.9 1.85-2.57.8-.63 1.77-1.04 2.77-1.18v4.02c-.52.07-1.03.24-1.48.52-.4.25-.74.59-.98 1-.22.38-.34.81-.34 1.25.01 1.48 1.22 2.69 2.69 2.7 1.48.01 2.69-1.21 2.7-2.69V.02z"/>
-                    </svg>
-                </div>
-            )
-        case 'Insta':
-            return (
-                <div className={cn("w-5 h-5 bg-gradient-to-tr from-[#f9ce34] via-[#ee2a7b] to-[#6228d7] rounded-md flex items-center justify-center text-white", className)}>
-                    <Instagram className="w-3 h-3" />
-                </div>
-            )
-        case 'Youtube':
-            return (
-                <div className={cn("w-5 h-5 bg-[#FF0000] rounded-md flex items-center justify-center text-white", className)}>
-                    <Play className="w-3 h-3 fill-current" />
-                </div>
-            )
-        case 'Zalo':
-            return (
-                <div className={cn("w-5 h-5 bg-[#0068FF] rounded-md flex items-center justify-center text-white font-black text-[8px]", className)}>
-                    Z
-                </div>
-            )
-        default:
-            return <Globe className={cn("w-5 h-5 text-muted-foreground", className)} />
-    }
+    const platform = PLATFORMS.find(p => p.id.toLowerCase() === id.toLowerCase())
+    if (!platform) return <Globe className={cn("w-5 h-5 text-muted-foreground", className)} />
+    
+    return (
+        <div className={cn("w-6 h-6 rounded-lg flex items-center justify-center p-1 relative overflow-hidden bg-surface-low shadow-sm border border-border/10", className)}>
+            <img src={platform.logo} className="w-full h-full object-contain" />
+        </div>
+    )
   }
+
 
   const fetchData = async () => {
     if (!window.ipcRenderer) return
@@ -106,11 +92,12 @@ export const ProjectsView: React.FC = () => {
       return
     }
     try {
+      const aiConfig = { provider: selectedProvider, model: selectedModel }
       if (editingId) {
-        await window.ipcRenderer.updateProject(editingId, newProjectName.trim(), selectedPlatforms)
+        await window.ipcRenderer.updateProject(editingId, newProjectName.trim(), selectedPlatforms, aiConfig)
         toast.success('Đã cập nhật dự án')
       } else {
-        await window.ipcRenderer.addProject(newProjectName.trim(), selectedPlatforms)
+        await window.ipcRenderer.addProject(newProjectName.trim(), selectedPlatforms, aiConfig)
         toast.success('Đã thêm dự án mới')
       }
       setNewProjectName('')
@@ -131,6 +118,16 @@ export const ProjectsView: React.FC = () => {
     } catch (e) {
         setSelectedPlatforms([])
     }
+
+    try {
+        const config = JSON.parse(p.ai_config || '{"provider":"google","model":"gemini-1.5-flash"}')
+        setSelectedProvider(config.provider || 'google')
+        setSelectedModel(config.model || 'gemini-1.5-flash')
+    } catch (e) {
+        setSelectedProvider('google')
+        setSelectedModel('gemini-1.5-flash')
+    }
+    
     setIsAddOpen(true)
   }
 
@@ -197,11 +194,6 @@ export const ProjectsView: React.FC = () => {
           </div>
           <div className="flex items-baseline gap-4">
             <span className="text-5xl font-display font-extrabold tracking-tighter">{stats.pages}</span>
-            <div className="flex -space-x-2 overflow-hidden">
-              {[1, 2, 3].map(n => (
-                <div key={n} className="inline-block h-6 w-6 rounded-full ring-2 ring-white bg-surface-mid" />
-              ))}
-            </div>
           </div>
         </Card>
       </div>
@@ -305,27 +297,76 @@ export const ProjectsView: React.FC = () => {
                   />
                 </div>
 
-                <div className="space-y-3">
+                <div className="space-y-1.5">
                   <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/80 ml-1">Nền tảng mục tiêu</label>
-                  <div className="grid grid-cols-2 gap-2">
-                    {PLATFORMS.map(plat => (
+                  <div className="flex flex-wrap gap-2">
+                    {PLATFORMS.map((p) => {
+                      const isSelected = selectedPlatforms.includes(p.id)
+                      return (
                         <button
-                            key={plat.id}
-                            type="button"
-                            onClick={() => setSelectedPlatforms(prev => 
-                                prev.includes(plat.id) ? prev.filter(p => p !== plat.id) : [...prev, plat.id]
-                            )}
-                            className={cn(
-                                "flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold transition-all border-2",
-                                selectedPlatforms.includes(plat.id) 
-                                    ? "bg-primary/5 border-primary text-primary" 
-                                    : "bg-surface-container-low border-transparent text-muted-foreground hover:bg-surface-low"
-                            )}
+                          key={p.id}
+                           type="button"
+                          onClick={() => {
+                            setSelectedPlatforms(prev => 
+                              prev.includes(p.id) ? prev.filter(x => x !== p.id) : [...prev, p.id]
+                            )
+                          }}
+                          className={cn(
+                            "flex items-center gap-2 px-3 py-2 rounded-xl border-2 transition-all font-bold text-xs",
+                            isSelected 
+                              ? "border-primary bg-primary/5 text-primary" 
+                              : "border-transparent bg-surface-container-low text-muted-foreground hover:bg-surface-mid"
+                          )}
                         >
-                            <div className={cn("w-2 h-2 rounded-full", plat.color)} />
-                            {plat.label}
+                          <div className={cn("w-5 h-5 rounded-lg flex items-center justify-center p-1", p.color)}>
+                            <img src={p.logo} className="w-full h-full object-contain" />
+                          </div>
+                          {p.label}
                         </button>
-                    ))}
+                      )
+                    })}
+                  </div>
+
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/80 ml-1">AI Provider</label>
+                    <Select value={selectedProvider} onValueChange={(val: any) => {
+                      setSelectedProvider(val)
+                      setSelectedModel(val === 'google' ? 'gemini-1.5-flash' : 'qwen2-vl-72b')
+                    }}>
+                      <SelectTrigger className="h-12 bg-surface-container-low border-none rounded-xl">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl border-none shadow-xl">
+                        <SelectItem value="google">Google AI</SelectItem>
+                        <SelectItem value="qwen">Qwen AI</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/80 ml-1">AI Model</label>
+                    <Select value={selectedModel} onValueChange={(v) => v && setSelectedModel(v)}>
+                      <SelectTrigger className="h-12 bg-surface-container-low border-none rounded-xl">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="rounded-xl border-none shadow-xl">
+                        {selectedProvider === 'google' ? (
+                          <>
+                            <SelectItem value="gemini-1.5-flash">Gemini 1.5 Flash</SelectItem>
+                            <SelectItem value="gemini-1.5-pro">Gemini 1.5 Pro</SelectItem>
+                            <SelectItem value="gemini-2.0-flash">Gemini 2.0 Flash</SelectItem>
+                          </>
+                        ) : (
+                          <>
+                            <SelectItem value="qwen2-vl-72b">Qwen2-VL 72B</SelectItem>
+                            <SelectItem value="qwen2-vl-7b">Qwen2-VL 7B</SelectItem>
+                            <SelectItem value="qwen2.5-72b">Qwen 2.5 72B</SelectItem>
+                          </>
+                        )}
+                      </SelectContent>
+                    </Select>
                   </div>
                 </div>
               </div>

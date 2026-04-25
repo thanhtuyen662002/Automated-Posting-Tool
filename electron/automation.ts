@@ -4,15 +4,15 @@ import { app } from 'electron'
 import { mkdirSync } from 'node:fs'
 
 const PLATFORM_LOGIN_URLS: Record<string, string> = {
-  "Tiktok": "https://www.tiktok.com/login",
-  "Facebook": "https://www.facebook.com",
-  "Youtube": "https://accounts.google.com/ServiceLogin?service=youtube",
-  "Instagram": "https://www.instagram.com/accounts/login/",
+  "tiktok": "https://www.tiktok.com/login",
+  "facebook": "https://www.facebook.com",
+  "youtube": "https://accounts.google.com/ServiceLogin?service=youtube",
+  "instagram": "https://www.instagram.com/accounts/login/",
 }
 
 export async function launchBrowserForLogin(pageData: any, onClosed?: () => void) {
   const { id, profile_dir, platform } = pageData
-  const loginUrl = PLATFORM_LOGIN_URLS[platform] || "https://www.google.com"
+  const loginUrl = PLATFORM_LOGIN_URLS[platform.toLowerCase()] || "https://www.google.com"
   
   // Ensure profile dir
   const rootPath = app.isPackaged ? path.dirname(app.getPath('exe')) : process.cwd()

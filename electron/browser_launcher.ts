@@ -12,6 +12,7 @@ export interface BrowserLaunchOptions {
   isMobile?: boolean
   viewport?: { width: number; height: number }
   platform?: string
+  proxy?: string // Định dạng: host:port hoặc host:port:user:pass
 }
 
 export class BrowserLauncher {
@@ -31,7 +32,7 @@ export class BrowserLauncher {
    * Ưu tiên: Chrome → Edge → Chromium stock
    */
   static async launchWithFallback(options: BrowserLaunchOptions): Promise<BrowserContext> {
-    const { userDataDir, headless = false, isMobile = false, viewport, platform } = options
+    const { userDataDir, headless = false, isMobile = false, viewport, platform, proxy } = options
     
     const defaultArgs = [
       '--disable-blink-features=AutomationControlled',
@@ -51,6 +52,9 @@ export class BrowserLauncher {
       viewport: viewport || { width: 1280, height: 800 }
     }
 
+    // Proxy Configuration
+    const proxyOptions = this.parseProxy(proxy)
+
     // Strategy 1: Try each channel in order
     for (const channel of this.BROWSER_CHANNELS) {
       try {
@@ -60,6 +64,7 @@ export class BrowserLauncher {
           headless,
           channel: channel as any,
           args: defaultArgs,
+          proxy: proxyOptions,
           ...mobileOptions
         })
 
@@ -77,9 +82,10 @@ export class BrowserLauncher {
       const context = await chromium.launchPersistentContext(userDataDir, {
         headless,
         args: [...defaultArgs, '--no-sandbox'],
+        proxy: proxyOptions,
         ...mobileOptions
       })
-      
+
       console.log('[BrowserLauncher] Thành công với Chromium mặc định')
       return context
     } catch (error: any) {
@@ -87,6 +93,48 @@ export class BrowserLauncher {
       throw new Error(
         'Không tìm thấy trình duyệt tương thích. Vui lòng cài đặt Chrome, Edge hoặc Chromium.'
       )
+    }
+  }
+
+  /**
+   * Helper to parse proxy strings
+   * Formats: host:port, host:port:user:pass, http://host:port, etc.
+   */
+  private static parseProxy(proxyStr?: string): { server: string; username?: string; password?: string } | undefined {
+    if (!proxyStr || proxyStr.trim() === '') return undefined
+
+    try {
+      // 1. Remove protocol if present
+      let cleanProxy = proxyStr.replace(/^(http|https|socks5|socks4):\/\//, '')
+      
+      // 2. Split by colon
+      const parts = cleanProxy.split(':')
+      
+      if (parts.length === 2) {
+        // host:port
+        return { server: `http://${parts[0]}:${parts[1]}` }
+      } else if (parts.length === 4) {
+        // host:port:user:pass
+        return {
+          server: `http://${parts[0]}:${parts[1]}`,
+          username: parts[2],
+          password: parts[3]
+        }
+      } else if (proxyStr.includes('@')) {
+        // user:pass@host:port
+        const url = new URL(proxyStr.startsWith('http') ? proxyStr : `http://${proxyStr}`)
+        return {
+          server: `${url.protocol}//${url.host}`,
+          username: url.username,
+          password: url.password
+        }
+      }
+
+      // Default fallback if logic above doesn't match perfectly but string exists
+      return { server: proxyStr.startsWith('http') ? proxyStr : `http://${proxyStr}` }
+    } catch (e) {
+      console.error('[BrowserLauncher] Lỗi khi nhận diện cấu hình Proxy:', e)
+      return undefined
     }
   }
 
@@ -102,7 +150,7 @@ export class BrowserLauncher {
       Facebook: {
         isMobile: true,
         viewport: { width: 360, height: 740 },
-        uploadUrl: 'https://www.facebook.com'
+        uploadUrl: 'https://m.facebook.com'
       },
       Instagram: {
         isMobile: true,

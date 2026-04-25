@@ -1,16 +1,27 @@
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { app } from 'electron'
+import { app, safeStorage } from 'electron'
 
 const ALGORITHM = 'aes-256-cbc'
 const KEY_PATH = path.join(app.getPath('userData'), '.secret.key')
+const MASTER_SECRET = path.join(app.getPath('userData'), '.safe.master')
 
 let SECRET_KEY: Buffer
 
 // Initialize or load key
 const initKey = () => {
-    if (fs.existsSync(KEY_PATH)) {
+    if (safeStorage.isEncryptionAvailable()) {
+        if (fs.existsSync(MASTER_SECRET)) {
+            const encrypted = fs.readFileSync(MASTER_SECRET)
+            SECRET_KEY = Buffer.from(safeStorage.decryptString(encrypted), 'base64')
+            return
+        }
+        const raw = crypto.randomBytes(32)
+        const encrypted = safeStorage.encryptString(raw.toString('base64'))
+        fs.writeFileSync(MASTER_SECRET, encrypted)
+        SECRET_KEY = raw
+    } else if (fs.existsSync(KEY_PATH)) {
         SECRET_KEY = fs.readFileSync(KEY_PATH)
     } else {
         SECRET_KEY = crypto.randomBytes(32)

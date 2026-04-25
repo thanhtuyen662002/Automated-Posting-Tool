@@ -11,6 +11,7 @@ import { PosterEngine } from './poster_engine.js'
 import { AutomationEngine } from './automation_engine.js'
 import { AutomationService } from './automation_service.js'
 import fs from 'node:fs/promises'
+import { POST_STATUS } from './post_status.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -41,9 +42,10 @@ function createWindow() {
     height: 900,
     icon: path.join(process.env.VITE_PUBLIC || '', 'electron-vite.svg'),
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      nodeIntegration: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+      nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
     },
     title: 'AutoPost Pro - Social Media Automation',
     titleBarStyle: 'hidden',
@@ -100,8 +102,8 @@ function createWindow() {
 // ── IPC Handlers ────────────────────────────────────────────────────────────
 
 ipcMain.handle('db:get-projects', () => dbService.getProjects())
-ipcMain.handle('db:add-project', (_, name, platforms) => dbService.addProject(name, platforms))
-ipcMain.handle('db:update-project', (_, { id, name, platforms }) => dbService.updateProject(id, name, platforms))
+ipcMain.handle('db:add-project', (_, name, platforms, aiConfig) => dbService.addProject(name, platforms, aiConfig))
+ipcMain.handle('db:update-project', (_, { id, name, platforms, aiConfig }) => dbService.updateProject(id, name, platforms, aiConfig))
 ipcMain.handle('db:delete-project', (_, id) => dbService.deleteProject(id))
 
 ipcMain.handle('db:get-pages', (_, projectId) => dbService.getPages(projectId))
@@ -124,7 +126,21 @@ ipcMain.handle('db:add-page', async (_, data) => {
   return newPage
 })
 ipcMain.handle('db:delete-page', (_, id) => dbService.deletePage(id))
+ipcMain.handle('db:update-page', (_, { id, data }) => dbService.updatePage(id, data))
 
+ipcMain.handle('db:get-accounts', (_, projectId) => dbService.getAccounts(projectId))
+ipcMain.handle('db:add-account', async (_, data) => {
+  // Generate a unique profile directory for the account if not provided
+  if (!data.profile_dir) {
+    const rootPath = app.isPackaged ? path.dirname(app.getPath('exe')) : process.cwd()
+    const profileDirName = `profile_${data.project_id}_acc_${data.account_name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_${Date.now()}`
+    data.profile_dir = path.join(rootPath, 'browser_profiles', profileDirName)
+  }
+  return dbService.addAccount(data)
+})
+ipcMain.handle('db:update-account', (_, { id, data }) => dbService.updateAccount(id, data))
+ipcMain.handle('db:delete-account', (_, id) => dbService.deleteAccount(id))
+ipcMain.handle('db:update-account-login-status', (_, { id, status }) => dbService.updateAccountLoginStatus(id, status))
 ipcMain.handle('db:get-posts', (_, projectId) => dbService.getPosts(projectId))
 ipcMain.handle('db:add-post', (_, data) => dbService.addPost(data))
 ipcMain.handle('db:delete-post', (_, id) => dbService.deletePost(id))
@@ -133,42 +149,37 @@ ipcMain.handle('db:get-stats', () => dbService.getStats())
 ipcMain.handle('db:get-logs', (_, limit, projectId) => dbService.getLogs(limit, projectId))
 ipcMain.handle('db:add-log', (_, data) => dbService.addLog(data))
 
-ipcMain.handle('browser:launch', async (_, pageId) => {
-  const pages = dbService.getPages()
-  const pageData = pages.find((p: any) => p.id === pageId) as any
-  if (pageData) {
-    dbService.addLog({
-      page_id: pageId,
-      project_id: pageData.project_id,
-      type: 'Trình duyệt',
-      status: 'warning',
-      message: 'Đang mở trình duyệt để đăng nhập...'
-    })
-    await launchBrowserForLogin(pageData, () => {
+ipcMain.handle('browser:launch', async (_, accountId) => {
+  if (typeof accountId !== 'number') {
+    return { success: false, error: 'Invalid account id' }
+  }
+  const accounts = dbService.getAccounts()
+  const account = accounts.find((a: any) => a.id === accountId)
+  
+  if (account) {
+    mainWindow?.webContents.send('engine:log', `[${account.platform}] Đang mở trình duyệt cho profile: ${account.account_name}...`)
+    
+    await launchBrowserForLogin(account, () => {
       // Callback when browser closes
-      dbService.updatePageLoginStatus(pageId, 1)
-      dbService.addLog({
-        page_id: pageId,
-        project_id: pageData.project_id,
-        type: 'Xác thực',
-        status: 'success',
-        message: 'Đã hoàn tất xác thực thủ công thành công'
-      })
-      mainWindow?.webContents.send('browser:closed', pageId)
+      dbService.updateAccountLoginStatus(account.id, 1)
+      mainWindow?.webContents.send('browser:closed', accountId)
     })
     return { success: true }
   }
-  return { success: false, error: 'Page not found' }
+  return { success: false, error: 'Account not found' }
 })
 
 ipcMain.handle('automation:run-post', async (_, { pageId, postId }) => {
+  if (typeof pageId !== 'number' || typeof postId !== 'number') {
+    return { success: false, error: 'Invalid payload' }
+  }
   const pages = dbService.getPages()
   const pageData = pages.find((p: any) => p.id === pageId) as any
   const posts = dbService.getPosts()
   const postData = posts.find((p: any) => p.id === postId) as any
 
   if (pageData && postData) {
-    dbService.updatePostStatus(postId, 'in-progress')
+    dbService.updatePostStatus(postId, POST_STATUS.PROCESSING)
     dbService.addLog({
       page_id: pageId,
       project_id: pageData.project_id,
@@ -180,7 +191,7 @@ ipcMain.handle('automation:run-post', async (_, { pageId, postId }) => {
     const result = await postContent(pageData, postData)
     
     if (result.success) {
-      dbService.updatePostStatus(postId, 'completed')
+      dbService.updatePostStatus(postId, POST_STATUS.PUBLISHED)
       dbService.addLog({
         page_id: pageId,
         project_id: pageData.project_id,
@@ -189,7 +200,7 @@ ipcMain.handle('automation:run-post', async (_, { pageId, postId }) => {
         message: `Đã đăng bài thành công: ${postData.title}`
       })
     } else {
-      dbService.updatePostStatus(postId, 'failed')
+      dbService.updatePostStatus(postId, POST_STATUS.FAILED, result.error)
       dbService.addLog({
         page_id: pageId,
         project_id: pageData.project_id,
@@ -259,12 +270,18 @@ ipcMain.handle('db:get-content-groups', (_, projectId) => dbService.getContentGr
 ipcMain.handle('db:add-content-group', (_, data) => dbService.addContentGroup(data))
 ipcMain.handle('db:delete-content-group', (_, id) => dbService.deleteContentGroup(id))
 
-ipcMain.handle('ai:generate-post', async (_, { promptId, keyword }) => {
+ipcMain.handle('ai:generate-post', async (_, { promptId, keyword, projectId, productId }) => {
   const prompts = dbService.getPrompts()
   const prompt = prompts.find((p: any) => p.id === promptId) as any
   if (!prompt) throw new Error('Mẫu prompt không tồn tại')
   
-  return await AIService.generatePostContent(prompt.content, keyword)
+  let productData = null
+  if (productId) {
+    const products = dbService.getProducts()
+    productData = products.find((p: any) => p.id === productId)
+  }
+  
+  return await AIService.generatePostContent(prompt.content, keyword, projectId, productData)
 })
 
 ipcMain.handle('ai:generate-cta', async (_, { promptId, productId, postContext }) => {
@@ -288,7 +305,7 @@ ipcMain.handle('ai:generate-cta', async (_, { promptId, productId, postContext }
       description: postContext.content,
       shopeeLink: postContext.shopeeLink,
       mediaAnalysis
-    }, prompt.content)
+    }, prompt.content, postContext.projectId)
   }
 
   // Case 2: Legacy Product-based Generation
@@ -297,11 +314,77 @@ ipcMain.handle('ai:generate-cta', async (_, { promptId, productId, postContext }
   
   if (!product) throw new Error('Sản phẩm không tồn tại')
   
-  return await AIService.generateCTAComment(product, prompt.content)
+  return await AIService.generateCTAComment(product, prompt.content, product.project_id)
 })
 
-ipcMain.handle('ai:analyze-media', async (_, filePath) => {
-  return await AIService.describeMedia(filePath)
+ipcMain.handle('ai:analyze-media', async (_, { filePath, projectId }) => {
+  return await AIService.describeMedia(filePath, projectId)
+})
+
+ipcMain.handle('ai:get-batch-prompt', async () => {
+  const record = dbService.getSetting('automation_batch_system_prompt') as any
+  if (record && record.encrypted_value) {
+    try {
+      return decrypt(record.encrypted_value)
+    } catch {
+      return record.encrypted_value
+    }
+  }
+  return ""
+})
+
+ipcMain.handle('ai:save-batch-prompt', async (_, prompt) => {
+  return dbService.saveSetting('automation_batch_system_prompt', encrypt(prompt))
+})
+
+ipcMain.handle('ai:generate-batch-posts', async (_, { pages, projectId, activeGroup, selectedPromptId, selectedProductId, keyword }) => {
+  const mediaFiles = JSON.parse(activeGroup.media_files)
+  const analysis = await AIService.describeMedia(mediaFiles[0], projectId)
+  const keywords = await AIService.analyzeAndRecommendKeywords(analysis)
+  
+  const prompts = dbService.getPrompts()
+  const platformPrompts: Record<string, string> = {}
+  
+  const platforms = [...new Set(pages.map((p: any) => p.platform))]
+  platforms.forEach(plat => {
+    // Find prompt for this platform/project
+    const pMatch = prompts.find((p: any) => {
+      const pjIds = JSON.parse(p.project_ids || '[]')
+      const plats = JSON.parse(p.platforms || '[]')
+      return pjIds.includes(projectId) && plats.includes(plat)
+    })
+    if (pMatch) platformPrompts[plat as string] = (pMatch as any).content
+  })
+
+  // Fallback to selectedPromptId if no platform-specific prompt found
+  if (Object.keys(platformPrompts).length === 0 && selectedPromptId) {
+    const selectedP = prompts.find((p: any) => p.id === Number(selectedPromptId))
+    if (selectedP) {
+      platforms.forEach(plat => { platformPrompts[plat as string] = (selectedP as any).content })
+    }
+  }
+
+  const systemPromptRecord = dbService.getSetting('automation_batch_system_prompt') as any
+  const defaultPrompt = `BẠN LÀ CHUYÊN GIA SÁNG TẠO NỘI DUNG MẠNG XÃ HỘI.
+NHIỆM VỤ: Viết bài độc nhất cho từng trang mục tiêu.
+ĐỊNH DẠNG TRẢ VỀ: JSON hợp lệ với cấu trúc:
+{
+  "Facebook": [{ "pageId": number, "pageName": "string", "title": "string", "content": "string", "hashtags": "string", "comment": "string" }],
+  "TikTok": [...],
+  "YouTube": [...]
+}
+LƯU Ý: Mỗi bài viết phải khác nhau hoàn toàn. Chỉ trả về JSON.`;
+
+  const systemPrompt = systemPromptRecord ? decrypt(systemPromptRecord.encrypted_value) : defaultPrompt;
+
+  return await AIService.generateBatchContent({
+    pages,
+    platformPrompts,
+    systemPrompt,
+    analysis,
+    keywords,
+    projectId
+  })
 })
 
 // ── Phase 4: Scheduling & Timeline ───────────────────────────────────────────
@@ -321,12 +404,17 @@ ipcMain.handle('engine:status', () => posterEngine?.getStatus())
 // ── Automation Engine (Smart Sync & Auto-Gen) ────────────────────────────────
 
 ipcMain.handle('automation:save-setting', (_, { key, value }) => {
-    return dbService.saveSetting(key, value) // Raw value since it's just a path or flag
+    return dbService.saveSetting(key, encrypt(String(value ?? '')))
 })
 
 ipcMain.handle('automation:get-setting', (_, key) => {
     const record = dbService.getSetting(key) as any
-    return record ? record.encrypted_value : ''
+    if (!record) return ''
+    try {
+      return decrypt(record.encrypted_value)
+    } catch {
+      return record.encrypted_value
+    }
 })
 
 ipcMain.handle('automation:select-root', async () => {
@@ -359,8 +447,16 @@ ipcMain.handle('automation:trigger-smart-gen', async (_, options) => {
 
 // ── Health Check ─────────────────────────────────────────────────────────────
 
-ipcMain.handle('browser:check-health-single', async (_, pageId) => {
-    return await AutomationService.checkPageHealth(pageId, (msg) => {
+// ── Health Check ─────────────────────────────────────────────────────────────
+
+ipcMain.handle('browser:check-health-single', async (_, pageId: number) => {
+    return AutomationService.checkPageHealth(pageId, (msg) => {
+        mainWindow?.webContents.send('engine:log', msg)
+    })
+})
+
+ipcMain.handle('automation:sync-page-info', async (_, pageId: number) => {
+    return AutomationService.syncPageInfo(pageId, (msg) => {
         mainWindow?.webContents.send('engine:log', msg)
     })
 })

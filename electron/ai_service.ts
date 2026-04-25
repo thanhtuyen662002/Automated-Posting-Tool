@@ -3,393 +3,520 @@ import { dbService } from './db'
 import { decrypt } from './crypto_utils'
 import fs from 'node:fs'
 import path from 'node:path'
+import OpenAI from 'openai'
 
 export class AIService {
-    // Cấu hình các model theo cấp độ - Tối ưu cho rate limit và chi phí
     private static readonly MODEL_CONFIGS = {
-        // Tier 1: Nhanh nhất, rẻ nhất - Cho tác vụ đơn giản
         LITE: {
-            name: 'gemini-2.0-flash-lite-preview-01-21', // Model mới nhất, nhanh nhất
-            fallback: 'gemini-1.5-flash',
+            name: 'models/gemini-3.1-flash-lite-preview', 
+            fallback: 'models/gemini-1.5-flash',
             maxOutputTokens: 2048,
             temperature: 0.7,
         },
-        // Tier 2: Cân bằng - Mặc định cho hầu hết tác vụ
         STANDARD: {
-            name: 'gemini-2.0-flash',
-            fallback: 'gemini-1.5-flash',
+            name: 'models/gemini-3.1-flash-lite-preview',
+            fallback: 'models/gemini-3-flash-preview',
             maxOutputTokens: 4096,
             temperature: 0.8,
         },
-        // Tier 3: Mạnh nhất - Cho tác vụ phức tạp
         PRO: {
-            name: 'gemini-1.5-pro',
-            fallback: 'gemini-2.0-flash',
+            name: 'models/gemini-3.1-pro-preview',
+            fallback: 'models/gemini-2.5-pro',
             maxOutputTokens: 8192,
             temperature: 0.9,
         },
+        BATCH: {
+            name: 'models/gemini-3-flash-preview',
+            fallback: 'models/gemini-1.5-pro',
+            maxOutputTokens: 16383,
+            temperature: 1.0,
+        }
     };
 
-    private static lastSuccessfulConfig: { model: string, version: string } | null = null;
     private static lastRequestTime: number = 0;
-    private static currentRetryDelay: number = 1000; // Adaptive backoff starting point
     private static readonly LARGE_FILE_THRESHOLD_MB = 20;
-    private static readonly RATE_LIMIT_INTERVAL_MS = 3000; // Giảm từ 5s xuống 3s nhờ dùng Lite model
-    private static readonly MAX_RETRY_DELAY = 30000;
-    private static readonly BASE_RETRY_DELAY = 1000;
-    
-    /**
-     * Chọn model dựa trên độ phức tạp của tác vụ
-     * Giúp tối ưu rate limit và chi phí
-     */
-    private static selectModel(taskType: 'simple' | 'standard' | 'complex' = 'standard') {
+    private static readonly RATE_LIMIT_INTERVAL_MS = 3000;
+
+    private static selectModel(taskType: 'simple' | 'standard' | 'complex' | 'batch' = 'standard') {
         switch (taskType) {
-            case 'simple':
-                return this.MODEL_CONFIGS.LITE;
-            case 'complex':
-                return this.MODEL_CONFIGS.PRO;
+            case 'simple': return this.MODEL_CONFIGS.LITE;
+            case 'batch': return this.MODEL_CONFIGS.BATCH;
+            case 'complex': return this.MODEL_CONFIGS.PRO;
             case 'standard':
-            default:
-                return this.MODEL_CONFIGS.STANDARD;
+            default: return this.MODEL_CONFIGS.STANDARD;
         }
     }
-    
-    /**
-     * Enhanced rate limiting với adaptive backoff
-     * Giải quyết hạn chế: Rate limit Gemini làm chậm quá trình sinh bài hàng loạt
-     */
+
     private static async applyRateLimit() {
         const now = Date.now();
         const timeSinceLast = now - this.lastRequestTime;
-        
         if (timeSinceLast < this.RATE_LIMIT_INTERVAL_MS) {
-            const waitTime = this.RATE_LIMIT_INTERVAL_MS - timeSinceLast;
-            console.log(`[AI Service] Rate limiting: Chờ ${waitTime}ms...`);
-            await new Promise(resolve => setTimeout(resolve, waitTime));
+            await new Promise(resolve => setTimeout(resolve, this.RATE_LIMIT_INTERVAL_MS - timeSinceLast));
         }
         this.lastRequestTime = Date.now();
     }
 
-    /**
-     * Xử lý file lớn với chiến lược phân tích thông minh
-     * Giải quyết hạn chế: Media file >20MB sẽ bị skip phân tích AI
-     */
+    private static processPromptWithPlaceholders(prompt: string, data: { product?: any, keyword?: string }) {
+        let processed = prompt;
+        const { product, keyword } = data;
+
+        if (product) {
+            // 1. Thẻ chính thức
+            const officialTags = [
+                { regex: /\[TÊN_SẢN_PHẨM\]/g, value: product.name },
+                { regex: /\[LINK_SẢN_PHẨM\]/g, value: product.shopee_link || product.web_link || '' },
+                { regex: /\[TỪ_KHÓA\]/g, value: keyword || '' }
+            ];
+            officialTags.forEach(tag => processed = processed.replace(tag.regex, tag.value));
+
+            // 2. Thẻ linh hoạt (Tiếng Việt)
+            const productNames = [
+                /\[Tên loại hoa\/mẫu kẽm nhung\]/gi,
+                /\[Tên mẫu hoa của bạn vào đây\]/gi,
+                /\[Tên sản phẩm\]/gi,
+                /\[Sản phẩm\]/gi,
+                /\[Tên váy\/đầm\/quần\]/gi,
+                /\[Tên mẫu thời trang\]/gi,
+                /\[Tên đồ gia dụng\]/gi,
+                /\[Tên món ăn\]/gi
+            ];
+            productNames.forEach(regex => {
+                processed = processed.replace(regex, product.name);
+            });
+
+            // 3. Link placeholders
+            const linkPlaceholders = [
+                /\[Link Shopee tại đây\]/gi,
+                /\[Link Shopee\]/gi,
+                /\[Link sản phẩm\]/gi,
+                /\[Link bio\]/gi,
+                /\[Link tại đây\]/gi,
+                /\[Link mua hàng\]/gi
+            ];
+            linkPlaceholders.forEach(regex => {
+                processed = processed.replace(regex, product.shopee_link || product.web_link || '');
+            });
+
+            processed = processed.replace(/\[Link Web\]/gi, product.web_link || '');
+            processed = processed.replace(/\[Link Zalo\]/gi, product.zalo_link || '');
+        }
+
+        if (keyword) {
+            processed = processed.replace(/\[TỪ_KHÓA\]/g, keyword);
+            processed = processed.replace(/\[Từ khóa\]/gi, keyword);
+            processed = processed.replace(/\[KEYWORD\]/gi, keyword);
+        }
+
+        return processed;
+    }
+
     private static async analyzeLargeFile(filePath: string): Promise<string> {
         const stats = fs.statSync(filePath)
         const fileSizeMB = stats.size / (1024 * 1024)
         const fileName = path.basename(filePath)
         const ext = path.extname(fileName).toLowerCase()
-        
-        console.log(`[AI Service] Phát hiện file lớn: ${fileName} (${fileSizeMB.toFixed(2)}MB)`);
-        
-        // Chiến lược 1: Với video lớn, chỉ phân tích tên file và extension
+
         if (['.mp4', '.mov', '.avi', '.mkv'].includes(ext)) {
             return `Video: ${fileName} (${fileSizeMB.toFixed(1)}MB). Hãy sinh nội dung dựa trên tên file và ngữ cảnh dự án.`;
         }
-        
-        // Chiến lược 2: Với ảnh lớn, thử phân tích trực tiếp (ảnh thường nén tốt hơn video)
+
         if (['.jpg', '.jpeg', '.png', '.webp'].includes(ext)) {
             try {
                 const imageData = fs.readFileSync(filePath)
-                // Gemini có thể xử lý ảnh đến vài MB, thử phân tích
                 return await this.analyzeImageDirect(imageData, fileName, ext);
             } catch (err) {
-                console.warn(`[AI Service] Không thể phân tích ảnh lớn ${fileName}, dùng fallback`);
                 return `Hình ảnh: ${fileName} (${fileSizeMB.toFixed(1)}MB). Hãy sinh nội dung dựa trên tên file.`;
             }
         }
-        
+
         return `Tệp tin: ${fileName} (${fileSizeMB.toFixed(1)}MB).`;
     }
 
-    private static async analyzeImageDirect(
-        imageData: Buffer, 
-        fileName: string, 
-        ext: string
-    ): Promise<string> {
-        // Sử dụng runWithFallback để thử nhiều model khác nhau
+    private static async analyzeImageDirect(imageData: Buffer, fileName: string, ext: string): Promise<string> {
+        const modelConfig = this.selectModel('simple');
         return this.runWithFallback(async (model) => {
             const prompt = "Hãy nhìn vào hình ảnh này và mô tả ngắn gọn nội dung của nó bằng 2-3 câu.";
-            
-            const mimeType = ext === '.png' ? 'image/png' : 
-                            ext === '.webp' ? 'image/webp' : 'image/jpeg';
-            
+            const mimeType = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+
             const result = await model.generateContent([
                 prompt,
-                {
-                    inlineData: {
-                        data: imageData.toString('base64'),
-                        mimeType
-                    }
-                }
+                { inlineData: { data: imageData.toString('base64'), mimeType } }
             ]);
             const response = await result.response;
             return response.text();
-        }).catch(err => {
+        }, modelConfig).catch(err => {
             console.warn(`[AI Service] Fallback analysis cho ${fileName}`);
             return `Hình ảnh: ${fileName}. Hãy sinh nội dung dựa trên tên file.`;
         });
     }
 
-    private static async getModel(modelName: string, apiVersion: string = 'v1') {
-        const encryptedKey = dbService.getSetting('gemini_api_key') as any
-        if (!encryptedKey || !encryptedKey.encrypted_value) {
-            throw new Error('Chưa cấu hình Gemini API Key. Vui lòng vào phần Cài đặt AI.')
-        }
-
-        const apiKey = decrypt(encryptedKey.encrypted_value)
-        const genAI = new GoogleGenerativeAI(apiKey)
-        return genAI.getGenerativeModel({ model: modelName }, { apiVersion })
+    private static async getModel(modelName: string, apiVersion: string = 'v1beta') {
+        const encryptedKey = dbService.getSetting('gemini_api_key') as any;
+        const apiKey = decrypt(encryptedKey.encrypted_value);
+        const genAI = new GoogleGenerativeAI(apiKey);
+        return genAI.getGenerativeModel({ model: modelName }, { apiVersion });
     }
 
-    // Helper to run AI calls with fallback across models and API versions
     private static async runWithFallback(
-        operation: (model: any) => Promise<any>, 
-        config?: { name: string, fallback: string }
+        operation: (model: any) => Promise<any>,
+        config: { name: string, fallback: string }
     ) {
-        // Nếu có config được truyền vào, ưu tiên sử dụng
-        if (config) {
-            try {
-                await this.applyRateLimit();
-                
-                const model = await this.getModel(config.name)
-                return await operation(model)
-            } catch (error: any) {
-                console.warn(`[AI Service] Model ${config.name} thất bại, thử fallback...`)
-                
-                // Thử fallback nếu có
+        try {
+            await this.applyRateLimit();
+            const model = await this.getModel(config.name)
+            return await operation(model)
+        } catch (error: any) {
+            const isRateLimited = error.status === 429 || error.message?.includes('429');
+            const isOverloaded = error.status === 503 || error.message?.includes('503');
+
+            if (isRateLimited || isOverloaded) {
+                console.warn(`[AI Service] Model ${config.name} ${isRateLimited ? 'hết lượt dùng' : 'quá tải'}. Đang chuyển sang fallback...`)
+
                 if (config.fallback) {
                     try {
-                        await this.applyRateLimit();
+                        await new Promise(resolve => setTimeout(resolve, 2000));
                         const fallbackModel = await this.getModel(config.fallback)
                         return await operation(fallbackModel)
                     } catch (fallbackError) {
-                        console.error(`[AI Service] Fallback ${config.fallback} cũng thất bại.`)
-                        throw fallbackError
+                        // Cứu cánh cuối cùng là model LITE (500 RPD)
+                        if (config.fallback !== this.MODEL_CONFIGS.LITE.name) {
+                            console.warn(`[AI Service] Thử model cứu cánh LITE (500 RPD)...`)
+                            try {
+                                const liteModel = await this.getModel(this.MODEL_CONFIGS.LITE.name)
+                                return await operation(liteModel)
+                            } catch (e) {
+                                throw fallbackError;
+                            }
+                        }
+                        throw fallbackError;
                     }
                 }
-                throw error
             }
+            throw error;
         }
+    }
 
-        // Fallback legacy: quét qua tất cả models nếu không có config
-        const modelNames = [
-            'gemini-2.0-flash-lite-preview-01-21', // Ưu tiên Lite model mới nhất
-            'gemini-2.0-flash',
-            'gemini-1.5-flash',
-            'gemini-1.5-pro',
-        ]
-        const versions = ['v1', 'v1beta']
-        
-        // 1. Try last successful config first
-        if (this.lastSuccessfulConfig) {
+    private static async getProviderConfig(projectId?: number): Promise<{ provider: 'google' | 'qwen', model: string }> {
+        if (!projectId) return { provider: 'google', model: this.MODEL_CONFIGS.STANDARD.name }
+
+        const projects = dbService.getProjects()
+        const project = projects.find(p => p.id === projectId) as any
+        if (project && project.ai_config) {
             try {
-                await this.applyRateLimit();
-                
-                const model = await this.getModel(this.lastSuccessfulConfig.model, this.lastSuccessfulConfig.version)
-                return await operation(model)
-            } catch (error: any) {
-                const isTransient = error.status === 503 || error.status === 429 || 
-                                  error.message?.includes('503') || error.message?.includes('429');
-                
-                if (isTransient) {
-                    console.warn(`[AI Service] Model ${this.lastSuccessfulConfig.model} đang bận (503/429). Chờ ${this.currentRetryDelay}ms...`)
-                    await new Promise(resolve => setTimeout(resolve, this.currentRetryDelay))
-                    this.currentRetryDelay = Math.min(this.currentRetryDelay * 2, this.MAX_RETRY_DELAY)
-                    try {
-                        const model = await this.getModel(this.lastSuccessfulConfig.model, this.lastSuccessfulConfig.version)
-                        return await operation(model)
-                    } catch (retryError) {
-                        console.error('[AI Service] Retry failed after 503/429.')
-                        throw retryError
-                    }
-                }
-
-                console.warn(`[AI Service] Cached config ${this.lastSuccessfulConfig.model} failed, re-scanning...`)
-                this.lastSuccessfulConfig = null
-                this.currentRetryDelay = this.BASE_RETRY_DELAY
+                return JSON.parse(project.ai_config)
+            } catch (e) {
+                console.error('[AI Service] Failed to parse ai_config, using default')
             }
         }
+        return { provider: 'google', model: this.MODEL_CONFIGS.STANDARD.name }
+    }
 
-        let lastError = null
+    private static async getQwenClient() {
+        const encryptedKey = dbService.getSetting('qwen_api_key') as any;
+        const apiKey = decrypt(encryptedKey.encrypted_value);
+        return new OpenAI({ apiKey, baseURL: 'https://openrouter.ai/api/v1' });
+    }
 
-        // 2. Scan through combinations
-        for (const version of versions) {
-            for (const modelName of modelNames) {
-                try {
-                    await this.applyRateLimit();
-                    
-                    console.log(`[AI Service] Scanning: ${modelName} on ${version}`)
-                    const model = await this.getModel(modelName, version)
-                    const result = await operation(model)
-                    
-                    this.lastSuccessfulConfig = { model: modelName, version }
-                    this.currentRetryDelay = this.BASE_RETRY_DELAY // Reset on success
-                    console.log(`[AI Service] Found working configuration: ${modelName} (${version})`)
-                    return result
-                } catch (error: any) {
-                    lastError = error
-                    const isNotFound = error.status === 404 || 
-                                     error.status === 403 ||
-                                     error.message?.includes('404') || 
-                                     error.message?.includes('not found') ||
-                                     error.message?.includes('403')
+    static async generatePostContent(promptContent: string, keyword: string, projectId?: number, productData?: any) {
+        const config = await this.getProviderConfig(projectId)
+        const processedPrompt = this.processPromptWithPlaceholders(promptContent, { product: productData, keyword })
 
-                    if (isNotFound) {
-                        continue
-                    }
-                    
-                    if (error.status === 503 || error.status === 429) {
-                        console.warn(`[AI Service] Found ${modelName} nhưng đang bận (503/429).`)
-                        this.lastSuccessfulConfig = { model: modelName, version }
-                        throw error
-                    }
-
-                    throw error 
-                }
-            }
+        if (config.provider === 'qwen') {
+            const client = await this.getQwenClient()
+            await this.applyRateLimit()
+            const response = await client.chat.completions.create({
+                model: config.model || 'qwen/qwen2.5-72b-instruct',
+                messages: [{ role: 'user', content: `${processedPrompt}\n\nTừ khóa chính: ${keyword}` }]
+            })
+            return response.choices[0].message.content || ''
         }
-        
-        console.error('[AI Service] All model/version combinations failed.')
-        throw lastError
-    }
 
-    static async generatePostContent(promptContent: string, keyword: string) {
-        // Sử dụng model STANDARD cho tác vụ sinh bài viết thông thường
-        const config = this.selectModel('standard');
-        
+        const modelConfig = this.selectModel('complex');
         return this.runWithFallback(async (model) => {
-            const fullPrompt = `${promptContent}\n\nTừ khóa chính của bài viết: ${keyword}`
+            const fullPrompt = `${processedPrompt}\n\nTừ khóa chính: ${keyword}`
             const result = await model.generateContent(fullPrompt)
             const response = await result.response
             return response.text()
-        }, config);
+        }, modelConfig);
     }
 
-    static async generateCTAComment(productData: any, promptContent: string) {
-        // Sử dụng model LITE cho tác vụ đơn giản như viết CTA
-        const config = this.selectModel('simple');
-        
+    static async generateCTAComment(productData: any, promptContent: string, projectId?: number) {
+        const config = await this.getProviderConfig(projectId)
+        const processedPrompt = this.processPromptWithPlaceholders(promptContent, { product: productData })
+
+        if (config.provider === 'qwen') {
+            const client = await this.getQwenClient()
+            await this.applyRateLimit()
+            const context = `Sản phẩm: ${productData.name}`
+            const response = await client.chat.completions.create({
+                model: config.model || 'qwen/qwen2.5-72b-instruct',
+                messages: [{ role: 'user', content: `${processedPrompt}\n\nNgữ cảnh: ${context}` }]
+            })
+            return response.choices[0].message.content || ''
+        }
+
+        const modelConfig = this.selectModel('simple');
         return this.runWithFallback(async (model) => {
-            const context = `Sản phẩm: ${productData.name}\nShopee: ${productData.shopee_link}\nZalo: ${productData.zalo_link}\nWeb: ${productData.web_link}`
-            const fullPrompt = `${promptContent}\n\nThông tin sản phẩm mục tiêu:\n${context}`
+            const context = `Sản phẩm: ${productData.name}`
+            const fullPrompt = `${processedPrompt}\n\nNgữ cảnh: ${context}`
             const result = await model.generateContent(fullPrompt)
             const response = await result.response
             return response.text()
-        }, config);
+        }, modelConfig);
     }
 
-    static async generateSmartCTAFromPost(context: { caption: string, description: string, shopeeLink: string, mediaAnalysis?: string }, promptContent: string) {
-        // Sử dụng model STANDARD cho CTA thông minh
-        const config = this.selectModel('standard');
-        
+    static async generateSmartCTAFromPost(context: { caption: string, description: string, shopeeLink: string, mediaAnalysis?: string }, promptContent: string, projectId?: number) {
+        const config = await this.getProviderConfig(projectId)
+        const contextStr = `Nội dung: ${context.caption}`
+        const fullPrompt = `Hãy viết một bình luận CTA dựa trên ngữ cảnh: ${contextStr}\nYêu cầu: ${promptContent}`
+
+        if (config.provider === 'qwen') {
+            const client = await this.getQwenClient()
+            await this.applyRateLimit()
+            const response = await client.chat.completions.create({
+                model: config.model || 'qwen/qwen2.5-72b-instruct',
+                messages: [{ role: 'user', content: fullPrompt }]
+            })
+            return response.choices[0].message.content || ''
+        }
+
+        const modelConfig = this.selectModel('simple');
         return this.runWithFallback(async (model) => {
-            const contextStr = `
-Nội dung bài viết: ${context.caption}
-Mô tả bổ sung: ${context.description}
-Link Shopee Sản phẩm: ${context.shopeeLink}
-${context.mediaAnalysis ? `Phân tích hình ảnh/video: ${context.mediaAnalysis}` : ''}
-`.trim()
-            const fullPrompt = `
-BẠN LÀ CHUYÊN GIA VIẾT BÌNH LUẬN ĐIỀU HƯỚNG (CTA).
-DỰA TRÊN NGỮ CẢNH BÀI VIẾT VÀ LINK SẢN PHẨM SAU ĐÂY, HÃY VIẾT MỘT BÌNH LUẬN TỰ NHIÊN, THU HÚT ĐỂ KHUYẾN KHÍCH NGƯỜI DÙNG NHẤP VÀO LINK.
-
-NGỮ CẢNH BÀI VIẾT:
-${contextStr}
-
-YÊU CẦU:
-${promptContent}
-
-TRẢ VỀ CHỈ NỘI DUNG BÌNH LUẬN, KHÔNG GIẢI THÍCH GÌ THÊM.
-`
             const result = await model.generateContent(fullPrompt)
             const response = await result.response
             return response.text()
-        }, config);
+        }, modelConfig);
     }
 
     static async analyzeAndRecommendKeywords(analysis: string) {
-        // Sử dụng model LITE cho tác vụ đơn giản như đề xuất từ khóa
-        const config = this.selectModel('simple');
-        
+        const modelConfig = this.selectModel('simple');
         return this.runWithFallback(async (model) => {
-            const prompt = `Dựa trên mô tả nội dung video/hình ảnh sau đây: "${analysis}". Hãy đề xuất 5-8 từ khóa (keywords) ngắn gọn, phù hợp nhất để SEO và gắn nhãn cho nội dung này. Chỉ trả về các từ khóa cách nhau bằng dấu phẩy, không giải thích thêm.`
+            const prompt = `Đề xuất 5-8 từ khóa cho nôi dung: "${analysis}". Chỉ trả về các từ khóa cách nhau bằng dấu phẩy.`
             const result = await model.generateContent(prompt)
             const response = await result.response
             return response.text().split(',').map((s: string) => s.trim()).filter((s: string) => s.length > 0).join(', ')
-        }, config);
+        }, modelConfig);
     }
 
-    static async generateSmartPostByGuidelines(guidelines: string, analysis: string, keywords: string) {
-        // Sử dụng model PRO cho tác vụ phức tạp cần suy luận sâu
-        const config = this.selectModel('complex');
-        
+    static async generateSmartPostByGuidelines(promptContent: string, analysis: string, keywords: string, projectId?: number) {
+        const config = await this.getProviderConfig(projectId)
+        const fullPrompt = `Guideline: ${promptContent}\nAnalysis: ${analysis}\nKeywords: ${keywords}`
+
+        if (config.provider === 'qwen') {
+            const client = await this.getQwenClient()
+            await this.applyRateLimit()
+            const response = await client.chat.completions.create({
+                model: config.model || 'qwen/qwen2.5-72b-instruct',
+                messages: [{ role: 'user', content: fullPrompt }]
+            })
+            return response.choices[0].message.content || ''
+        }
+
+        const modelConfig = this.selectModel('complex')
         return this.runWithFallback(async (model) => {
-            const prompt = `
-BẠN LÀ CHUYÊN GIA SÁNG TẠO NỘI DUNG MẠNG XÃ HỘI.
-
-ĐÂY LÀ QUY ĐỊNH CHUNG (GUIDELINES):
-${guidelines}
-
-ĐÂY LÀ PHÂN TÍCH MEDIA (HÌNH ẢNH/VIDEO):
-${analysis}
-
-TỪ KHÓA ĐỀ XUẤT:
-${keywords}
-
-YÊU CẦU:
-Dựa trên Quy định chung và Phân tích nội dung media, hãy viết một bài đăng hoàn chỉnh bao gồm:
-1. Tiêu đề (thu hút).
-2. Nội dung bài viết (phù hợp với phong cách trong Quy định chung).
-3. Hashtags (liên quan đến nội dung và từ khóa).
-
-Định dạng trả về:
-Tiêu đề: ...
-Nội dung: ...
-Hashtags: ...
-`
-            const result = await model.generateContent(prompt)
+            const result = await model.generateContent(fullPrompt)
             const response = await result.response
             return response.text()
-        }, config);
+        }, modelConfig)
     }
 
-    static async describeMedia(filePath: string) {
+    static async describeMedia(filePath: string, projectId?: number) {
+        const config = await this.getProviderConfig(projectId)
+        const stats = fs.statSync(filePath)
+        const fileSizeMB = stats.size / (1024 * 1024)
+        const ext = path.extname(filePath).toLowerCase()
+        const fileName = path.basename(filePath)
+        const isVideo = ['.mp4', '.mov', '.avi', '.mkv', '.webm'].includes(ext)
+
+        // 1. Xử lý file quá lớn (không thể upload trực tiếp Base64)
+        if (fileSizeMB > this.LARGE_FILE_THRESHOLD_MB) {
+            return await this.analyzeLargeFile(filePath)
+        }
+
+        // 2. Nếu dùng Qwen (OpenRouter) - hỗ trợ Vision
+        if (config.provider === 'qwen') {
+            try {
+                const client = await this.getQwenClient()
+                const base64Data = fs.readFileSync(filePath).toString('base64')
+                const response = await client.chat.completions.create({
+                    model: config.model || 'qwen/qwen2.5-vl-72b-instruct',
+                    messages: [
+                        {
+                            role: 'user',
+                            content: [
+                                { type: 'text', text: 'Hãy mô tả chi tiết nội dung của file media này để phục vụ viết bài quảng cáo bán hàng.' },
+                                {
+                                    type: 'image_url',
+                                    image_url: { url: `data:image/jpeg;base64,${base64Data}` }
+                                }
+                            ]
+                        }
+                    ]
+                })
+                return response.choices[0].message.content || 'Không thể mô tả nội dung.'
+            } catch (e) {
+                console.warn('[AI Service] Qwen Vision failed, falling back to basic analysis')
+            }
+        }
+
+        // 3. Mặc định dùng Gemini
+        const imageData = fs.readFileSync(filePath)
+        const modelConfig = this.selectModel('simple');
+
+        return this.runWithFallback(async (model) => {
+            const prompt = "Hãy nhìn vào nội dung này và mô tả ngắn gọn nội dung của nó bằng 3-5 câu chi tiết về màu sắc, kiểu dáng, bối cảnh.";
+            return await model.generateContent([
+                prompt,
+                { inlineData: { data: imageData.toString('base64'), mimeType: isVideo ? 'video/mp4' : 'image/jpeg' } }
+            ])
+        }, modelConfig).then(async (result) => {
+            const response = await result.response
+            return response.text()
+        }).catch(() => `Tệp tin: ${fileName}. Hãy sinh nội dung dựa trên tên tệp.`);
+    }
+
+    static async generateBatchContent(params: {
+        pages: any[],
+        platformPrompts: Record<string, string>,
+        systemPrompt: string,
+        analysis: string,
+        keywords: string,
+        projectId: number
+    }): Promise<any> {
+        const { pages, platformPrompts, systemPrompt, analysis, keywords, projectId } = params;
+        const pagesList = pages.map(p => `- ID: ${p.id}, Tên: ${p.page_name}, Nền tảng: ${p.platform}`).join('\n');
+
+        let platformContext = "YÊU CẦU RIÊNG CHO TỪNG NỀN TẢNG:\n";
+        Object.entries(platformPrompts).forEach(([plat, prompt]) => {
+            platformContext += `[${plat}]: ${prompt}\n`;
+        });
+
+        const fullPrompt = `${systemPrompt}\n\nPHÂN TÍCH MEDIA:\n${analysis}\n\nTỪ KHÓA:\n${keywords}\n\nDANH SÁCH TRANG:\n${pagesList}\n\n${platformContext}`.trim();
+
         try {
-            const stats = fs.statSync(filePath)
-            const fileSizeMB = stats.size / (1024 * 1024)
-            const fileName = path.basename(filePath)
-            
-            // Xử lý file lớn với chiến lược thông minh
-            if (fileSizeMB > this.LARGE_FILE_THRESHOLD_MB) {
-                return await this.analyzeLargeFile(filePath)
+            const rawResponse = await this.executeAIRequest(fullPrompt, projectId, 'batch');
+            let results: any = { Facebook: [], TikTok: [], YouTube: [] };
+            results = this.parseBatchResponse(rawResponse, results);
+
+            let missingPages = this.getMissingPages(pages, results);
+            let retryCount = 0;
+            const MAX_RETRIES = 2;
+
+            while (missingPages.length > 0 && retryCount < MAX_RETRIES) {
+                console.log(`[AI Service] Missing ${missingPages.length} posts, retrying...`);
+                retryCount++;
+                const continuationPrompt = `Tiếp tục sinh nội dung cho các trang sau: ${missingPages.map(p => p.page_name).join(', ')}`;
+                const partialResponse = await this.executeAIRequest(continuationPrompt, projectId, 'batch');
+                results = this.parseBatchResponse(partialResponse, results);
+                missingPages = this.getMissingPages(pages, results);
             }
 
-            // File nhỏ hơn threshold, phân tích bình thường
-            const imageData = fs.readFileSync(filePath)
-            const ext = path.extname(filePath).toLowerCase()
-            const isVideo = ['.mp4', '.mov', '.avi', '.mkv', '.webm'].includes(ext)
-            
-            const prompt = "Hãy nhìn vào hình ảnh/video này và mô tả ngắn gọn nội dung của nó bằng 2-3 câu. Tập trung vào chủ đề chính và các chi tiết nổi bật để làm tư liệu viết bài."
-            
-            const result = await this.runWithFallback(async (model) => {
-                return await model.generateContent([
-                    prompt,
-                    {
-                        inlineData: {
-                            data: imageData.toString('base64'),
-                            mimeType: isVideo ? 'video/mp4' : 'image/jpeg'
-                        }
-                    }
-                ])
-            })
-            
-            const response = await result.response
-            return response.text()
-        } catch (err: any) {
-            console.error('[AI Service] Media analysis failed:', err.message)
-            const fileName = path.basename(filePath)
-            return `Không thể phân tích nội dung "${fileName}". Hãy sinh nội dung dựa trên tên file.`
+            return results;
+        } catch (error: any) {
+            console.error('[AI Service] Batch generation error:', error);
+            throw error;
         }
+    }
+
+    private static async executeAIRequest(prompt: string, projectId: number, taskType: 'standard' | 'complex' | 'batch' | 'simple'): Promise<string> {
+        const config = await this.getProviderConfig(projectId);
+
+        if (config.provider === 'qwen') {
+            const client = await this.getQwenClient();
+            await this.applyRateLimit();
+            const response = await client.chat.completions.create({
+                model: config.model || 'qwen/qwen2.5-72b-instruct',
+                messages: [{ role: 'user', content: prompt }],
+                response_format: { type: 'json_object' } as any
+            });
+            return response.choices[0].message.content || '';
+        }
+
+        const modelConfig = this.selectModel(taskType);
+        return this.runWithFallback(async (model) => {
+            const result = await model.generateContent({
+                contents: [{ role: 'user', parts: [{ text: prompt }] }],
+                generationConfig: {
+                    responseMimeType: 'application/json'
+                }
+            });
+            const response = await result.response;
+            return response.text();
+        }, modelConfig);
+    }
+
+    private static normalizePlatform(plat: string): string {
+        const p = plat.toLowerCase().trim();
+        if (p.includes('facebook') || p === 'fb') return 'Facebook';
+        if (p.includes('tiktok')) return 'TikTok';
+        if (p.includes('youtube') || p === 'yt') return 'YouTube';
+        if (p.includes('instagram') || p === 'insta' || p === 'ig') return 'Instagram';
+        if (p.includes('zalo')) return 'Zalo';
+        return plat;
+    }
+
+    private static parseBatchResponse(raw: string, currentResults: any): any {
+        try {
+            const jsonMatch = raw.match(/\{[\s\S]*\}/);
+            const cleanJson = jsonMatch ? jsonMatch[0] : raw;
+
+            let parsed: any = {};
+            try {
+                parsed = JSON.parse(cleanJson);
+            } catch (e) {
+                parsed = this.tryRecoverPartialJSON(cleanJson);
+            }
+
+            Object.keys(parsed).forEach(key => {
+                const normKey = this.normalizePlatform(key);
+                if (currentResults[normKey] && Array.isArray(parsed[key])) {
+                    currentResults[normKey] = [...currentResults[normKey], ...parsed[key]];
+                }
+            });
+            if (parsed.posts && Array.isArray(parsed.posts)) {
+                parsed.posts.forEach((p: any) => {
+                    const platform = this.normalizePlatform(p.platform || p.nền_tảng || '');
+                    if (currentResults[platform]) currentResults[platform].push(p);
+                });
+            }
+
+            return currentResults;
+        } catch (e) {
+            console.error('[AI Service] Parse error:', e);
+            return currentResults;
+        }
+    }
+
+    private static tryRecoverPartialJSON(text: string): any {
+        let stack = 0;
+        let lastValidIndex = -1;
+
+        for (let i = 0; i < text.length; i++) {
+            if (text[i] === '{') stack++;
+            if (text[i] === '}') {
+                stack--;
+                if (stack >= 0) lastValidIndex = i;
+            }
+        }
+
+        if (lastValidIndex !== -1) {
+            let partial = text.substring(0, lastValidIndex + 1);
+            while (stack > 0) {
+                partial += '}';
+                stack--;
+            }
+            try { return JSON.parse(partial); } catch (e) { return {}; }
+        }
+        return {};
+    }
+
+    private static getMissingPages(allPages: any[], currentResults: any): any[] {
+        const foundIds = new Set([
+            ...currentResults.Facebook.map((p: any) => p.pageId || p.id),
+            ...currentResults.TikTok.map((p: any) => p.pageId || p.id),
+            ...currentResults.YouTube.map((p: any) => p.pageId || p.id)
+        ]);
+
+        return allPages.filter(p => !foundIds.has(p.id));
     }
 }

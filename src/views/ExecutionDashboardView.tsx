@@ -5,16 +5,22 @@ import {
     ShieldCheck,
     Clock,
     AlertCircle, 
-    Facebook,
-    Instagram,
-    Youtube,
-    Music2,
     ChevronRight,
     Loader2,
     Box,
     Wifi} from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { cn } from '@/lib/utils'
+
+// Brand Assets
+import facebookLogo from '@/assets/facebook.svg'
+import tiktokLogo from '@/assets/tiktok.svg'
+import youtubeLogo from '@/assets/youtube.svg'
+import instagramLogo from '@/assets/instagram.svg'
+import zaloLogo from '@/assets/zalo.svg'
+import shopeeLogo from '@/assets/shopee.svg'
+
 
 interface ActiveJob {
     id: number
@@ -22,6 +28,7 @@ interface ActiveJob {
     pageName: string
     platform: string
     title: string
+    isVideo: boolean
     frameData: string // base64
 }
 
@@ -51,7 +58,8 @@ export const ExecutionDashboardView: React.FC = () => {
             projectName: project?.name || 'Dự án',
             pageName: page?.page_name || 'Page',
             platform: page?.platform || 'Facebook',
-            title: post.title
+            title: post.title,
+            isVideo: post.media_path ? post.media_path.match(/\.(mp4|mov|avi|wmv)$/i) !== null : false
         }
         metadataCache.current[jobId] = meta
         return meta
@@ -60,7 +68,7 @@ export const ExecutionDashboardView: React.FC = () => {
     useEffect(() => {
         if (!window.ipcRenderer) return
 
-        const handleFrame = async (_event: any, { jobId, frame }: { jobId: number, frame: string }) => {
+        const handleFrame = async ({ jobId, frame }: { jobId: number, frame: string }) => {
             if (frame === 'FINISHED') {
                 setActiveJobs(prev => {
                     const next = { ...prev }
@@ -70,8 +78,23 @@ export const ExecutionDashboardView: React.FC = () => {
                 return
             }
 
-            // If we don't have metadata yet, fetch it
-            if (!activeJobs[jobId]) {
+            // Always update from previous state to avoid stale closures/re-subscriptions.
+            let hasMeta = false
+            setActiveJobs(prev => {
+                const existing = prev[jobId]
+                hasMeta = Boolean(existing)
+                if (existing) {
+                    return {
+                        ...prev,
+                        [jobId]: {
+                            ...existing,
+                            frameData: frame
+                        }
+                    }
+                }
+                return prev
+            })
+            if (!hasMeta) {
                 const meta = await fetchMetadata(jobId)
                 if (meta) {
                     setActiveJobs(prev => ({
@@ -83,15 +106,6 @@ export const ExecutionDashboardView: React.FC = () => {
                         }
                     }))
                 }
-            } else {
-                // Just update frame
-                setActiveJobs(prev => ({
-                    ...prev,
-                    [jobId]: {
-                        ...prev[jobId],
-                        frameData: frame
-                    }
-                }))
             }
         }
 
@@ -107,7 +121,7 @@ export const ExecutionDashboardView: React.FC = () => {
             })
         }
 
-        const cleanup = window.ipcRenderer.on('engine:frame', handleFrame)
+        const cleanup = window.ipcRenderer.onEngineFrame(handleFrame)
         
         // Initial status check
         handleStatusUpdate()
@@ -117,17 +131,22 @@ export const ExecutionDashboardView: React.FC = () => {
             if (cleanup) cleanup()
             clearInterval(statusInterval)
         }
-    }, [activeJobs])
+    }, [])
 
     const getPlatformIcon = (platform: string) => {
+        let logo = ''
         switch (platform.toLowerCase()) {
-            case 'facebook': return <Facebook className="w-4 h-4 text-blue-600" />
-            case 'tiktok': return <Music2 className="w-4 h-4 text-slate-900" />
-            case 'instagram': return <Instagram className="w-4 h-4 text-pink-600" />
-            case 'youtube': return <Youtube className="w-4 h-4 text-red-600" />
+            case 'facebook': logo = facebookLogo; break;
+            case 'tiktok': logo = tiktokLogo; break;
+            case 'instagram': logo = instagramLogo; break;
+            case 'youtube': logo = youtubeLogo; break;
+            case 'zalo': logo = zaloLogo; break;
+            case 'shopee': logo = shopeeLogo; break;
             default: return <Box className="w-4 h-4 text-gray-400" />
         }
+        return <img src={logo} className="w-4 h-4 object-contain" />
     }
+
 
     const jobList = Object.values(activeJobs)
 
@@ -181,9 +200,11 @@ export const ExecutionDashboardView: React.FC = () => {
 
             {/* Live Grid */}
             {jobList.length > 0 ? (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-6">
-                    {jobList.map((job) => (
-                        <Card key={job.id} className="group relative border-none bg-surface-lowest rounded-[2rem] overflow-hidden shadow-xl transition-all duration-300 hover:shadow-2xl hover:-translate-y-1 border-2 border-transparent hover:border-emerald-500/10">
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-6 grid-flow-row-dense">
+                    {jobList.map((job) => {
+                        const isDesktop = (job.platform.toLowerCase() === 'facebook' && job.isVideo) || ['tiktok', 'youtube', 'linkedin', 'twitter'].includes(job.platform.toLowerCase());
+                        return (
+                        <Card key={job.id} className={cn("group relative border-none bg-surface-lowest rounded-[2rem] overflow-hidden shadow-xl transition-all duration-300 hover:shadow-2xl hover:-translate-y-1 border-2 border-transparent hover:border-emerald-500/10 flex flex-col", isDesktop ? "col-span-1 sm:col-span-2 md:col-span-2" : "col-span-1")}>
                             {/* Browser Header / Meta */}
                             <div className="p-4 space-y-2 relative z-10 bg-white/90 backdrop-blur-sm border-b border-surface-container-high/50">
                                 <div className="flex justify-between items-start">
@@ -201,8 +222,8 @@ export const ExecutionDashboardView: React.FC = () => {
                                 <h5 className="font-bold text-[11px] truncate">{job.title}</h5>
                             </div>
 
-                            {/* Live Viewport (Mobile Aspect) */}
-                            <div className="relative aspect-[360/740] bg-zinc-900 flex items-center justify-center overflow-hidden">
+                            {/* Live Viewport */}
+                            <div className={cn("relative bg-zinc-900 flex items-center justify-center overflow-hidden flex-1", isDesktop ? "aspect-[16/10]" : "aspect-[360/740]")}>
                                 {job.frameData ? (
                                     <img 
                                         src={`data:image/jpeg;base64,${job.frameData}`}
@@ -231,7 +252,8 @@ export const ExecutionDashboardView: React.FC = () => {
                                 </div>
                             </div>
                         </Card>
-                    ))}
+                        )
+                    })}
                 </div>
             ) : (
                 <div className="py-32 flex flex-col items-center justify-center text-center space-y-6">

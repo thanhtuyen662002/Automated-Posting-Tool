@@ -1,24 +1,40 @@
-```
 # Dependencies
 node_modules/
+.pnp
+.pnp.js
 
 # Build artifacts
 dist/
+dist-electron/
 build/
 target/
+out/
+release/
+bin/
+obj/
 
-# Python
+# Local Database (SQLite)
+*.db
+*.db-shm
+*.db-wal
+data.db*
+
+# Browser Profiles & Sessions
+browser_profiles/
+
+# AI & Media Temp Files
+temp_watermarks/
+scratch/
+
+# Python (if any legacy)
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.py.class
+*.py[cod]
+*$py.class
 .Python
 env/
 venv/
 .venv/
 .ENV
-.venv.bak/
 pip-log.txt
 pip-delete-this-directory.txt
 .tox/
@@ -29,36 +45,38 @@ nosetests.xml
 coverage.xml
 *.cover
 *.log
-*.tmp
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables & Secrets
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+.env.*
+.secret.key
+.safe.master
+
+# IDE & Editor
+.vscode/*
+!.vscode/extensions.json
+.idea/
 *.swp
 *.swo
 .DS_Store
 Thumbs.db
 
-# Electron specific
-electron/dist/
-electron/build/
-out/
-release/
-app/node_modules/
-
-# Logs
-*.log
-
-# Environment variables
-.env
-.env.local
-*.env
-.env.*
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Coverage
+# Testing
 coverage/
 htmlcov/
 .coverage
-```
+
+# Documentation & Agents
+.agents/

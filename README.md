@@ -1,73 +1,63 @@
-# React + TypeScript + Vite
+# Automated Posting Tool
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Desktop app (Electron + React) để quản lý nội dung, sinh bài bằng AI, lên lịch đăng và tự động đăng đa nền tảng.
 
-Currently, two official plugins are available:
+## Chức năng chính
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Quản lý dự án, account, page và mapping platform.
+- Quản lý media/content groups, sinh bài đơn hoặc batch bằng AI.
+- Lên lịch thông minh theo khung giờ và giới hạn bài/ngày.
+- Robot auto-post theo lịch, có dashboard giám sát runtime.
+- Lưu dữ liệu local bằng SQLite và ghi activity logs.
 
-## React Compiler
+## Nền tảng hỗ trợ đăng tự động
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- Facebook
+- Instagram
+- TikTok
+- YouTube
 
-## Expanding the ESLint configuration
+## Yêu cầu môi trường
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+- Node.js 24+ (khuyến nghị)
+- npm 10+
+- FFmpeg (được dùng qua `ffmpeg-static` trong project)
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Cài đặt
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm install
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+## Chạy local
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```bash
+npm run dev
 ```
+
+## Build
+
+```bash
+npm run build
+npm run dist
+```
+
+## Kiểm tra chất lượng
+
+```bash
+npm run lint
+npm run typecheck
+npm run test
+```
+
+## Bảo mật và secrets
+
+- API keys được mã hóa trước khi lưu vào bảng `settings`.
+- Electron renderer chỉ gọi IPC qua API whitelisted trong preload (không expose generic IPC).
+- Với hệ điều hành hỗ trợ, mã hóa dùng `safeStorage`; fallback local key chỉ dùng khi không khả dụng.
+
+## Trạng thái bài viết (unified)
+
+- `draft` -> `approved` -> `scheduled` -> `processing` -> `published | failed`
+
+Các trạng thái legacy như `pending`, `completed`, `in-progress` sẽ được chuẩn hóa khi chạy app.

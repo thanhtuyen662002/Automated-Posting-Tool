@@ -8,7 +8,8 @@ import {
     Clock4, 
     ChevronRight,
     Loader2,
-    Calendar as CalendarIcon
+    Calendar as CalendarIcon,
+    ShieldCheck
 } from 'lucide-react'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -19,10 +20,17 @@ import {
     DialogContent, 
     DialogHeader, 
     DialogTitle,
-    DialogFooter
 } from '@/components/ui/dialog'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
+
+// Brand Assets
+import facebookLogo from '@/assets/facebook.svg'
+import tiktokLogo from '@/assets/tiktok.svg'
+import youtubeLogo from '@/assets/youtube.svg'
+import instagramLogo from '@/assets/instagram.svg'
+import zaloLogo from '@/assets/zalo.svg'
+import shopeeLogo from '@/assets/shopee.svg'
 
 export const ScheduleManagerView: React.FC = () => {
     const [projects, setProjects] = useState<any[]>([])
@@ -107,16 +115,48 @@ export const ScheduleManagerView: React.FC = () => {
 
     const getStatusBadge = (status: string) => {
         switch (status) {
-            case 'scheduled': return <Badge className="bg-sky-500 text-white border-none">Đã lên lịch</Badge>
-            case 'approved': return <Badge className="bg-emerald-500 text-white border-none">Đã duyệt</Badge>
-            case 'published': return <Badge className="bg-emerald-100 text-emerald-700 border-none">Đã đăng</Badge>
-            case 'failed': return <Badge className="bg-red-100 text-red-700 border-none">Lỗi</Badge>
-            default: return <Badge variant="outline" className="text-muted-foreground">{status}</Badge>
+            case 'scheduled': 
+                return (
+                    <Badge className="bg-sky-50 text-sky-600 border border-sky-100 px-3 py-1 rounded-full text-[10px] font-bold shadow-sm">
+                        <Clock className="w-3 h-3 mr-1" /> Đã lên lịch
+                    </Badge>
+                )
+            case 'approved': 
+                return (
+                    <Badge className="bg-emerald-50 text-emerald-600 border border-emerald-100 px-3 py-1 rounded-full text-[10px] font-bold shadow-sm">
+                        <ShieldCheck className="w-3 h-3 mr-1" /> Đã duyệt
+                    </Badge>
+                )
+            case 'published': 
+            case 'completed':
+                return (
+                    <Badge className="bg-emerald-500 text-white border-none px-3 py-1 rounded-full text-[10px] font-bold shadow-md">
+                        <Save className="w-3 h-3 mr-1" /> Đã hoàn tất
+                    </Badge>
+                )
+            case 'processing':
+                return (
+                    <Badge className="bg-amber-50 text-amber-600 border border-amber-100 px-3 py-1 rounded-full text-[10px] font-bold shadow-sm animate-pulse">
+                        <Loader2 className="w-3 h-3 mr-1 animate-spin" /> Đang đăng...
+                    </Badge>
+                )
+            case 'failed': 
+                return (
+                    <Badge className="bg-red-500 text-white border-none px-3 py-1 rounded-full text-[10px] font-bold shadow-md">
+                        Lỗi hệ thống
+                    </Badge>
+                )
+            default: 
+                return (
+                    <Badge className="bg-surface-container-high text-muted-foreground border-none px-3 py-1 rounded-full text-[10px] font-bold">
+                        Chờ xử lý
+                    </Badge>
+                )
         }
     }
 
     const formatDateTime = (iso: string) => {
-        if (!iso) return 'Chưa lên lịch'
+        if (!iso) return 'Chờ phân bổ...'
         return new Date(iso).toLocaleString('vi-VN', {
             hour: '2-digit',
             minute: '2-digit',
@@ -144,10 +184,10 @@ export const ScheduleManagerView: React.FC = () => {
                 <div className="flex gap-4">
                     <Button 
                         onClick={handleRunScheduler}
-                        className="h-12 primary-gradient text-white rounded-xl shadow-lg shadow-primary/20 font-bold px-6 gap-2"
+                        className="h-12 primary-gradient text-white rounded-xl shadow-xl shadow-primary/20 font-bold px-8 gap-2 transition-all hover:scale-[1.02] active:scale-95"
                     >
                         <Play className="w-4 h-4 fill-current" />
-                        Tự động lên lịch Toàn cục
+                        Tự động lên lịch
                     </Button>
                 </div>
             </div>
@@ -155,26 +195,29 @@ export const ScheduleManagerView: React.FC = () => {
             <div className="w-full">
                 {/* Timeline Dashboard */}
                 <div className="space-y-6">
-                    <Card className="border-none shadow-none bg-surface-lowest rounded-[2.5rem] p-8 overflow-hidden min-h-[600px] flex flex-col">
-                        <div className="flex items-center gap-4 mb-8">
-                             <div className="w-10 h-10 bg-sky-50 rounded-xl flex items-center justify-center text-sky-500">
-                                <CalendarDays className="w-5 h-5" />
+                    <Card className="border-none shadow-none bg-surface-lowest rounded-[2.5rem] p-10 overflow-hidden min-h-[600px] flex flex-col">
+                        <div className="flex items-center gap-4 mb-10">
+                             <div className="w-14 h-14 bg-sky-50 rounded-[1.25rem] flex items-center justify-center text-sky-500 shadow-inner">
+                                <CalendarDays className="w-8 h-8" />
                             </div>
-                            <h3 className="text-xl font-bold">Timeline bài đăng</h3>
+                            <div>
+                                <h3 className="text-2xl font-display font-extrabold">Lộ trình bài đăng</h3>
+                                <p className="text-xs text-muted-foreground">Phân tích dòng chảy nội dung theo thời gian</p>
+                            </div>
                         </div>
 
                         <div className="w-full">
                             {/* Header */}
-                            <div className="grid grid-cols-12 px-4 py-3 text-[10px] font-bold uppercase tracking-widest text-muted-foreground bg-surface-low rounded-xl mb-4">
-                                <div className="col-span-4">Bài viết & Nội dung</div>
+                            <div className="grid grid-cols-12 px-6 py-4 text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground/50 bg-surface-low rounded-2xl mb-6">
+                                <div className="col-span-4">Thông tin bài viết</div>
                                 <div className="col-span-2">Nền tảng</div>
-                                <div className="col-span-3">Thời gian dự kiến</div>
+                                <div className="col-span-3">Thời gian đăng</div>
                                 <div className="col-span-2 text-center">Trạng thái</div>
                                 <div className="col-span-1"></div>
                             </div>
 
                             {/* Body */}
-                            <div className="space-y-3 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar">
+                            <div className="space-y-2 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar">
                                 {posts.length > 0 ? (
                                     posts
                                         .sort((a,b) => {
@@ -183,9 +226,9 @@ export const ScheduleManagerView: React.FC = () => {
                                             return new Date(a.scheduled_at).getTime() - new Date(b.scheduled_at).getTime()
                                         })
                                         .map((p, i) => (
-                                            <div key={i} className="grid grid-cols-12 items-center px-4 py-5 hover:bg-surface-low transition-colors rounded-3xl group border border-transparent hover:border-border/5">
-                                                <div className="col-span-4 flex items-center gap-3">
-                                                    <div className="w-10 h-10 bg-surface-container rounded-xl overflow-hidden flex-shrink-0 flex items-center justify-center">
+                                            <div key={i} className="grid grid-cols-12 items-center px-6 py-4 hover:bg-surface-low/80 transition-all rounded-[1.5rem] group border border-transparent hover:border-border/5 hover:translate-x-1">
+                                                <div className="col-span-4 flex items-center gap-4">
+                                                    <div className="w-12 h-12 bg-surface-container rounded-2xl overflow-hidden flex-shrink-0 flex items-center justify-center shadow-sm">
                                                         {p.media_path ? (
                                                             isVideo(p.media_path) ? (
                                                                 <video 
@@ -200,26 +243,48 @@ export const ScheduleManagerView: React.FC = () => {
                                                                 />
                                                             )
                                                         ) : (
-                                                            <CalendarIcon className="w-5 h-5 text-muted-foreground/30" />
+                                                            <CalendarIcon className="w-6 h-6 text-muted-foreground/20" />
                                                         )}
                                                     </div>
                                                     <div className="min-w-0">
-                                                        <div className="text-[9px] font-black tracking-widest text-primary uppercase leading-none mb-1">
+                                                        <div className="text-[10px] font-black tracking-widest text-primary/60 uppercase leading-none mb-1.5 font-display">
                                                             {projects.find(pj => pj.id === p.project_id)?.name || 'Dự án'}
                                                         </div>
-                                                        <h4 className="font-bold text-xs truncate pr-4">{p.title || 'Không có tiêu đề'}</h4>
-                                                        <p className="text-[10px] text-muted-foreground truncate opacity-60">ID: #{p.id}</p>
+                                                        <h4 className="font-extrabold text-sm truncate pr-4 text-sky-950">{p.title || 'Mẫu bài viết mới'}</h4>
                                                     </div>
                                                 </div>
                                                 <div className="col-span-2">
-                                                    <span className="text-[10px] font-bold text-muted-foreground uppercase">{pages.find(pg => pg.id === p.page_id)?.platform || 'Không xác định'}</span>
+                                                    {(() => {
+                                                        const platform = pages.find(pg => pg.id === p.page_id)?.platform || ''
+                                                        let logo = ''
+                                                        switch (platform.toLowerCase()) {
+                                                            case 'facebook': logo = facebookLogo; break;
+                                                            case 'tiktok': logo = tiktokLogo; break;
+                                                            case 'instagram': logo = instagramLogo; break;
+                                                            case 'youtube': logo = youtubeLogo; break;
+                                                            case 'zalo': logo = zaloLogo; break;
+                                                            case 'shopee': logo = shopeeLogo; break;
+                                                        }
+                                                        if (!logo) return <Badge variant="outline" className="text-[9px] uppercase font-bold">{platform || '???'}</Badge>
+                                                        return (
+                                                            <div className="flex items-center gap-3">
+                                                                <div className="w-6 h-6 bg-surface-lowest rounded-lg p-1.5 shadow-sm border border-border/5">
+                                                                    <img src={logo} className="w-full h-full object-contain" />
+                                                                </div>
+                                                                <span className="text-[10px] font-black text-muted-foreground/80 uppercase tracking-wider">{platform}</span>
+                                                            </div>
+                                                        )
+                                                    })()}
                                                 </div>
+
                                                 <div className="col-span-3">
-                                                    <div className="flex items-center gap-2">
-                                                        <Clock className="w-3.5 h-3.5 text-primary/40" />
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-8 h-8 rounded-full bg-surface-container-low flex items-center justify-center">
+                                                            <Clock className="w-4 h-4 text-primary" />
+                                                        </div>
                                                         <span className={cn(
-                                                            "text-[11px] font-bold",
-                                                            p.scheduled_at ? "text-foreground" : "text-muted-foreground italic"
+                                                            "text-xs font-bold",
+                                                            p.scheduled_at ? "text-foreground" : "text-muted-foreground italic opacity-50 text-[10px]"
                                                         )}>
                                                             {formatDateTime(p.scheduled_at)}
                                                         </span>
@@ -233,19 +298,19 @@ export const ScheduleManagerView: React.FC = () => {
                                                         variant="ghost" 
                                                         size="icon" 
                                                         onClick={() => handleEditClick(p)}
-                                                        className="w-8 h-8 rounded-lg opacity-0 group-hover:opacity-100 transition-opacity hover:bg-amber-50"
+                                                        className="w-10 h-10 rounded-xl opacity-0 group-hover:opacity-100 transition-all hover:bg-amber-100 hover:text-amber-600"
                                                     >
-                                                        <Edit className="w-4 h-4 text-amber-500" />
+                                                        <Edit className="w-5 h-5" />
                                                     </Button>
                                                 </div>
                                             </div>
                                         ))
                                 ) : (
-                                    <div className="py-20 text-center flex flex-col items-center gap-4">
-                                        <div className="w-16 h-16 bg-surface-container-low rounded-full flex items-center justify-center text-muted-foreground/20">
-                                            <Clock4 className="w-8 h-8" />
+                                    <div className="py-24 text-center flex flex-col items-center gap-6">
+                                        <div className="w-20 h-20 bg-surface-container-low rounded-[2rem] flex items-center justify-center text-muted-foreground/10 rotate-12">
+                                            <Clock4 className="w-10 h-10" />
                                         </div>
-                                        <p className="text-sm text-muted-foreground italic">Chưa có bài viết nào đang chờ xử lý.</p>
+                                        <p className="text-sm text-muted-foreground font-medium italic opacity-50">Dòng thời gian đang trống. Hãy sinh nội dung để bắt đầu.</p>
                                     </div>
                                 )}
                             </div>
@@ -256,48 +321,77 @@ export const ScheduleManagerView: React.FC = () => {
 
             {/* Edit Schedule Dialog */}
             <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-                <DialogContent className="rounded-[2.5rem] border-none p-10 bg-surface-lowest shadow-2xl max-w-md">
-                    <DialogHeader>
-                        <DialogTitle className="text-2xl font-display font-extrabold flex items-center gap-3">
-                            <Clock4 className="w-6 h-6 text-amber-500" />
-                            <span>Thay đổi thời gian đăng</span>
-                        </DialogTitle>
-                    </DialogHeader>
-                    
-                    <div className="py-6 space-y-6">
-                        <div className="p-4 bg-surface-low rounded-2xl border border-border/5 space-y-2">
-                            <h4 className="text-[10px] font-black uppercase tracking-widest text-muted-foreground">Bài viết đang chọn</h4>
-                            <p className="font-bold text-sm text-sky-900 truncate">{editingPost?.title || 'Không có tiêu đề'}</p>
+                <DialogContent className="rounded-[2.5rem] border-none p-0 bg-white shadow-[0_20px_60px_rgba(0,0,0,0.12)] sm:max-w-[500px] overflow-hidden animate-in zoom-in-95 duration-300">
+                    <div className="p-8 sm:p-10 space-y-8">
+                        
+                        {/* Header Dialog */}
+                        <DialogHeader>
+                            <div className="flex items-center gap-5">
+                                <div className="w-14 h-14 primary-gradient rounded-[1.25rem] flex items-center justify-center text-white shadow-xl shadow-primary/20 shrink-0">
+                                    <Clock4 className="w-7 h-7" />
+                                </div>
+                                <div className="space-y-1 text-left mt-1">
+                                    <DialogTitle className="text-2xl font-display font-extrabold text-sky-950 tracking-tight">
+                                        Lịch đăng bài
+                                    </DialogTitle>
+                                    <p className="text-[11px] font-bold uppercase tracking-[0.15em] text-muted-foreground/50">Tùy chỉnh thời gian Robot</p>
+                                </div>
+                            </div>
+                        </DialogHeader>
+                        
+                        <div className="space-y-6">
+                            {/* Khối hiển thị bài viết */}
+                            <div className="p-6 bg-surface-lowest rounded-3xl border-2 border-surface-container-low space-y-3 relative overflow-hidden group shadow-sm hover:border-primary/20 hover:shadow-md transition-all duration-300">
+                                <div className="absolute top-0 right-0 w-32 h-32 bg-primary/5 rounded-full -mr-16 -mt-16 transition-transform group-hover:scale-125 duration-700" />
+                                
+                                <h4 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60 relative">Đang chọn nội dung</h4>
+                                
+                                <p className="font-extrabold text-base text-sky-950 relative leading-snug line-clamp-2 pr-2">
+                                    {editingPost?.title || 'Bài viết không tiêu đề'}
+                                </p>
+                                
+                                <div className="flex items-center gap-3 relative pt-2">
+                                    <span className="text-[10px] font-black bg-primary/10 text-primary px-3 py-1.5 rounded-lg uppercase tracking-wider">ID: #{editingPost?.id}</span>
+                                    <span className="text-[8px] text-muted-foreground/30">●</span>
+                                    <span className="text-[11px] font-semibold text-muted-foreground/60 italic">Cấu hình riêng</span>
+                                </div>
+                            </div>
+
+                            {/* Khối chọn thời gian */}
+                            <div className="space-y-3 bg-white">
+                                <label className="text-[11px] font-bold uppercase tracking-widest text-sky-950 ml-1">Thời gian đăng mới</label>
+                                <div className="relative group">
+                                    <CalendarIcon className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-primary/40 group-focus-within:text-primary transition-colors duration-300" />
+                                    <Input 
+                                        type="datetime-local"
+                                        value={newScheduledTime}
+                                        onChange={(e) => setNewScheduledTime(e.target.value)}
+                                        className="h-14 pl-12 bg-surface-lowest border-2 border-surface-container-high hover:border-primary/30 rounded-2xl font-bold text-sm focus-visible:ring-4 focus-visible:ring-primary/10 transition-all shadow-sm w-full"
+                                    />
+                                </div>
+                                <p className="text-[11px] text-muted-foreground/50 italic px-2">💡 Gợi ý: Hãy chọn khung giờ có tương tác cao (Giờ vàng).</p>
+                            </div>
                         </div>
 
-                        <div className="space-y-2">
-                            <label className="text-[10px] font-black uppercase tracking-widest text-muted-foreground ml-1">Chọn thời gian mới</label>
-                            <Input 
-                                type="datetime-local"
-                                value={newScheduledTime}
-                                onChange={(e) => setNewScheduledTime(e.target.value)}
-                                className="h-14 bg-surface-low border-none rounded-2xl font-bold text-sm focus:ring-primary/20"
-                            />
+                        {/* Nút hành động */}
+                        <div className="flex justify-end gap-3 pt-6 border-t border-surface-container-low">
+                             <Button 
+                                variant="ghost" 
+                                onClick={() => setIsEditDialogOpen(false)}
+                                className="h-12 px-6 rounded-2xl font-bold text-sm text-muted-foreground hover:bg-surface-low hover:text-sky-950 transition-all"
+                            >
+                                Hủy bỏ
+                            </Button>
+                            <Button 
+                                onClick={handleUpdateSchedule}
+                                disabled={isUpdating}
+                                className="primary-gradient h-12 px-8 rounded-2xl font-bold text-sm text-white shadow-xl shadow-primary/25 hover:translate-y-[-2px] active:translate-y-[0px] transition-all disabled:opacity-50 gap-2"
+                            >
+                                {isUpdating ? <Loader2 className="w-5 h-5 animate-spin" /> : <Save className="w-5 h-5" />}
+                                Lưu lịch đăng
+                            </Button>
                         </div>
                     </div>
-
-                    <DialogFooter className="gap-2 sm:justify-start">
-                        <Button 
-                            onClick={handleUpdateSchedule}
-                            disabled={isUpdating}
-                            className="primary-gradient h-12 px-8 rounded-2xl font-bold flex-1"
-                        >
-                            {isUpdating ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
-                            Lưu thay đổi
-                        </Button>
-                        <Button 
-                            variant="ghost" 
-                            onClick={() => setIsEditDialogOpen(false)}
-                            className="h-12 px-8 rounded-2xl font-bold bg-surface-container-low"
-                        >
-                            Hủy
-                        </Button>
-                    </DialogFooter>
                 </DialogContent>
             </Dialog>
         </div>

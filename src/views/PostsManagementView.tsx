@@ -18,12 +18,22 @@ import {
     LayoutGrid,
     Calendar,
     Save,
-    Sparkles
+    Sparkles,
+    ShieldCheck
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+
+// Brand Assets
+import facebookLogo from '@/assets/facebook.svg'
+import tiktokLogo from '@/assets/tiktok.svg'
+import youtubeLogo from '@/assets/youtube.svg'
+import instagramLogo from '@/assets/instagram.svg'
+import zaloLogo from '@/assets/zalo.svg'
+import shopeeLogo from '@/assets/shopee.svg'
+
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { 
     DropdownMenu, 
@@ -37,8 +47,7 @@ import {
     Dialog, 
     DialogContent, 
     DialogHeader, 
-    DialogTitle,
-    DialogFooter
+    DialogTitle
 } from '@/components/ui/dialog'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from 'sonner'
@@ -197,25 +206,33 @@ export const PostsManagementView: React.FC = () => {
     const getStatusInfo = (status: string) => {
         switch (status) {
             case 'published':
-                return { label: 'Đã đăng', color: 'bg-emerald-50 text-emerald-600 border-emerald-100', icon: CheckCircle2 }
+            case 'completed':
+                return { label: 'Đã xuất bản', color: 'bg-emerald-500 text-white border-none px-3 shadow-md', icon: CheckCircle2 }
             case 'scheduled':
-                return { label: 'Đã lên lịch', color: 'bg-sky-50 text-sky-600 border-sky-100', icon: Clock }
+                return { label: 'Đã lên lịch', color: 'bg-sky-50 text-sky-600 border-sky-100 px-3 shadow-sm', icon: Clock }
             case 'pending':
-                return { label: 'Chờ duyệt', color: 'bg-amber-50 text-amber-600 border-amber-100', icon: FileText }
+            case 'draft':
+                return { label: 'Đang chờ duyệt', color: 'bg-amber-50 text-amber-600 border-amber-100 px-3 shadow-sm', icon: FileText }
             case 'processing':
-                return { label: 'Đang đăng', color: 'bg-primary/5 text-primary border-primary/10', icon: Loader2 }
+                return { label: 'Robot đang đăng', color: 'bg-sky-50 text-sky-600 border-sky-200 px-3 shadow-sm animate-pulse', icon: Loader2 }
             case 'failed':
-                return { label: 'Thất bại', color: 'bg-red-50 text-red-600 border-red-100', icon: AlertCircle }
+                return { label: 'Gặp sự cố', color: 'bg-red-500 text-white border-none px-3 shadow-md', icon: AlertCircle }
+            case 'approved':
+                return { label: 'Đã duyệt CP', color: 'bg-emerald-50 text-emerald-600 border-emerald-100 px-3 shadow-sm', icon: ShieldCheck }
             default:
-                return { label: status, color: 'bg-slate-50 text-slate-600 border-slate-100', icon: FileText }
+                return { label: 'Chờ xử lý', color: 'bg-slate-50 text-slate-600 border-slate-100 px-3 shadow-sm', icon: FileText }
         }
     }
 
     const filteredPosts = posts.filter(post => {
-        const matchesSearch = (post.title?.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                             post.content?.toLowerCase().includes(searchTerm.toLowerCase()))
+        const title = post.title?.toLowerCase() || ''
+        const content = post.content?.toLowerCase() || ''
+        const searchTermLower = searchTerm.toLowerCase()
+        
+        const matchesSearch = title.includes(searchTermLower) || content.includes(searchTermLower)
         const matchesStatus = statusFilter === 'all' || post.status === statusFilter
-        const matchesProject = projectFilter === 'all' || post.project_id.toString() === projectFilter
+        const matchesProject = projectFilter === 'all' || (post.project_id && post.project_id.toString() === projectFilter)
+        
         return matchesSearch && matchesStatus && matchesProject
     })
 
@@ -261,7 +278,7 @@ export const PostsManagementView: React.FC = () => {
                 {[
                     { label: 'Tổng bài viết', value: posts.length, icon: FileText, hasAlert: false },
                     { label: 'Đã xuất bản', value: posts.filter(p => p.status === 'published').length, icon: CheckCircle2, status: 'Ổn định', statusColor: 'text-emerald-500' },
-                    { label: 'Đang xếp hàng', value: posts.filter(p => ['pending', 'scheduled'].includes(p.status)).length, icon: Calendar, hasAlert: posts.filter(p => ['pending', 'scheduled'].includes(p.status)).length > 0 },
+                    { label: 'Đang xếp hàng', value: posts.filter(p => ['draft', 'approved', 'scheduled'].includes(p.status)).length, icon: Calendar, hasAlert: posts.filter(p => ['draft', 'approved', 'scheduled'].includes(p.status)).length > 0 },
                     { label: 'Vấn đề/Lỗi', value: posts.filter(p => p.status === 'failed').length, icon: AlertCircle, hasAlert: posts.filter(p => p.status === 'failed').length > 0 },
                 ].map((metric, i) => (
                     <Card key={i} className="border-none shadow-none bg-surface-container-lowest rounded-2xl p-6">
@@ -297,7 +314,7 @@ export const PostsManagementView: React.FC = () => {
                     />
                 </div>
                 
-                <Select value={projectFilter} onValueChange={setProjectFilter}>
+                <Select value={projectFilter} onValueChange={(v) => v && setProjectFilter(v)}>
                     <SelectTrigger className="w-[180px] h-11 bg-surface-lowest border-none rounded-xl font-bold text-[10px] uppercase tracking-widest">
                         <SelectValue placeholder="Dự án: Tất cả" />
                     </SelectTrigger>
@@ -312,7 +329,7 @@ export const PostsManagementView: React.FC = () => {
                     </SelectContent>
                 </Select>
 
-                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                <Select value={statusFilter} onValueChange={(v) => v && setStatusFilter(v)}>
                     <SelectTrigger className="w-[180px] h-11 bg-surface-lowest border-none rounded-xl font-bold text-[10px] uppercase tracking-widest">
                         <SelectValue placeholder="Trạng thái: Tất cả" />
                     </SelectTrigger>
@@ -322,7 +339,7 @@ export const PostsManagementView: React.FC = () => {
                             <SelectItem value="all">Mọi trạng thái</SelectItem>
                             <SelectItem value="published">Đã đăng</SelectItem>
                             <SelectItem value="scheduled">Đã lên lịch</SelectItem>
-                            <SelectItem value="pending">Chờ duyệt</SelectItem>
+                            <SelectItem value="draft">Chờ duyệt</SelectItem>
                             <SelectItem value="processing">Đang đăng</SelectItem>
                             <SelectItem value="failed">Thất bại</SelectItem>
                         </SelectGroup>
@@ -403,12 +420,23 @@ export const PostsManagementView: React.FC = () => {
                                             <td className="px-6 py-6 border-none">
                                                 <div className="flex items-center gap-3">
                                                     <div className={cn(
-                                                        "w-8 h-8 rounded-lg flex items-center justify-center text-white shadow-sm",
-                                                        page?.platform.toLowerCase() === 'fb' ? 'bg-[#1877F2]' : 
-                                                        page?.platform.toLowerCase() === 'tiktok' ? 'bg-[#000000]' : 'bg-[#E1306C]'
+                                                        "w-8 h-8 rounded-lg flex items-center justify-center bg-surface-lowest shadow-sm border border-border/10 p-1.5",
                                                     )}>
-                                                        <Globe className="w-4 h-4" />
+                                                        {(() => {
+                                                            const platform = page?.platform?.toLowerCase() || ''
+                                                            let logo = ''
+                                                            if (platform.includes('fb') || platform.includes('facebook')) logo = facebookLogo
+                                                            else if (platform.includes('tiktok')) logo = tiktokLogo
+                                                            else if (platform.includes('insta')) logo = instagramLogo
+                                                            else if (platform.includes('youtube')) logo = youtubeLogo
+                                                            else if (platform.includes('zalo')) logo = zaloLogo
+                                                            else if (platform.includes('shopee')) logo = shopeeLogo
+                                                            
+                                                            if (logo) return <img src={logo} className="w-full h-full object-contain" />
+                                                            return <Globe className="w-4 h-4 text-muted-foreground" />
+                                                        })()}
                                                     </div>
+
                                                     <div className="min-w-0">
                                                         <div className="text-xs font-bold truncate max-w-[150px]">{page?.page_name || 'Nguồn không xác định'}</div>
                                                         <div className="text-[10px] text-muted-foreground/60 uppercase font-black">{page?.platform || 'Global'}</div>
@@ -443,7 +471,7 @@ export const PostsManagementView: React.FC = () => {
                                                     </DropdownMenuTrigger>
                                                     <DropdownMenuContent align="end" className="w-56 p-2 rounded-[1.5rem] border-none shadow-2xl animate-in zoom-in-95 duration-200">
                                                         <DropdownMenuLabel className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground px-4 py-3">Tác vụ bài viết</DropdownMenuLabel>
-                                                        {post.status === 'pending' && (
+                                                        {(post.status === 'pending' || post.status === 'draft') && (
                                                             <DropdownMenuItem onClick={() => handleApprove(post.id)} className="rounded-xl px-4 py-3 gap-3 cursor-pointer group/item text-emerald-600 bg-emerald-50/50 hover:bg-emerald-50">
                                                                 <CheckCircle2 className="w-4 h-4 transition-transform group-hover/item:scale-110" />
                                                                 <span className="text-xs font-bold text-emerald-600">Phê duyệt (Approve)</span>
@@ -504,171 +532,203 @@ export const PostsManagementView: React.FC = () => {
                 </div>
             </Card>
 
-            {/* Edit / View Dialog */}
+            {/* Edit / View Dialog - Soft UI Redesign */}
             <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>
-                <DialogContent className="sm:max-w-[700px] rounded-[2.5rem] border-none p-10 bg-surface-container-lowest animate-in zoom-in-95 duration-300 shadow-2xl">
-                    <DialogHeader>
-                        <DialogTitle className="text-2xl font-display font-extrabold flex items-center gap-3">
-                            {isViewOnly ? (
-                                <>
-                                    <Eye className="w-6 h-6 text-primary" />
-                                    <span>Chi tiết bài viết</span>
-                                </>
-                            ) : (
-                                <>
-                                    <Edit className="w-6 h-6 text-amber-500" />
-                                    <span>Chỉnh sửa nội dung</span>
-                                </>
-                            )}
-                        </DialogTitle>
-                    </DialogHeader>
-
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8 py-6">
-                        <div className="space-y-6">
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground/60 ml-1">Tiêu đề bài viết</label>
-                                <Input 
-                                    value={editFormData.title}
-                                    onChange={(e) => setEditFormData({ ...editFormData, title: e.target.value })}
-                                    readOnly={isViewOnly}
-                                    className="h-12 bg-surface-low border-none rounded-2xl font-bold text-sm focus-visible:ring-primary/20"
-                                />
-                            </div>
-
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground/60 ml-1">Nội dung bài viết</label>
-                                <Textarea 
-                                    value={editFormData.content}
-                                    onChange={(e) => setEditFormData({ ...editFormData, content: e.target.value })}
-                                    readOnly={isViewOnly}
-                                    placeholder="Nội dung chính của bài viết..."
-                                    className="min-h-[180px] bg-surface-low border-none rounded-2xl py-4 font-medium text-sm leading-relaxed resize-none focus-visible:ring-primary/20"
-                                />
-                            </div>
-
-                            {!isViewOnly && (
-                                <div className="p-5 bg-amber-50/50 rounded-3xl border border-amber-100 space-y-4">
-                                    <div className="flex items-center gap-2 text-amber-700">
-                                        <Sparkles className="w-4 h-4" />
-                                        <span className="text-[10px] font-black uppercase tracking-widest">Tiếp thị Affiliate (CTA)</span>
-                                    </div>
-                                    
-                                    <div className="grid grid-cols-2 gap-3">
-                                        <Select value={selectedProductId} onValueChange={setSelectedProductId}>
-                                            <SelectTrigger className="h-10 bg-white border-none rounded-xl text-[10px] font-bold">
-                                                <SelectValue placeholder="Chọn sản phẩm..." />
-                                            </SelectTrigger>
-                                            <SelectContent className="rounded-xl border-none shadow-xl">
-                                                {products.map(p => (
-                                                    <SelectItem key={p.id} value={p.id.toString()}>{p.name}</SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-
-                                        <Select value={selectedCtaPromptId} onValueChange={setSelectedCtaPromptId}>
-                                            <SelectTrigger className="h-10 bg-white border-none rounded-xl text-[10px] font-bold">
-                                                <SelectValue placeholder="Mẫu CTA..." />
-                                            </SelectTrigger>
-                                            <SelectContent className="rounded-xl border-none shadow-xl">
-                                                {ctaPrompts.map(p => (
-                                                    <SelectItem key={p.id} value={p.id.toString()}>{p.name}</SelectItem>
-                                                ))}
-                                            </SelectContent>
-                                        </Select>
-                                    </div>
-
-                                    <Button 
-                                        onClick={handleGenerateCTA}
-                                        disabled={isGeneratingCTA || !selectedProductId}
-                                        className="w-full h-10 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold text-[10px] uppercase tracking-widest gap-2 shadow-lg shadow-amber-200"
-                                    >
-                                        {isGeneratingCTA ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
-                                        Sinh bình luận CTA
-                                    </Button>
+                <DialogContent className="sm:max-w-[840px] rounded-[2.5rem] border border-slate-100 p-0 bg-white shadow-[0_20px_60px_-15px_rgba(0,0,0,0.1)] overflow-hidden animate-in zoom-in-95 duration-300">
+                    <div className="p-8 sm:p-10 space-y-8 max-h-[85vh] overflow-y-auto custom-scrollbar">
+                        
+                        {/* Header Dialog */}
+                        <DialogHeader>
+                            <div className="flex items-center gap-4">
+                                <div className={cn(
+                                    "w-12 h-12 rounded-2xl flex items-center justify-center shrink-0",
+                                    isViewOnly 
+                                        ? "bg-slate-100 text-slate-600" 
+                                        : "bg-primary/10 text-primary"
+                                )}>
+                                    {isViewOnly ? <Eye className="w-6 h-6" /> : <Edit className="w-6 h-6" />}
                                 </div>
-                            )}
-
-                            <div className="space-y-2">
-                                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground/60 ml-1">Bình luận CTA / Link Shopee</label>
-                                <Textarea 
-                                    value={editFormData.comment_cta}
-                                    onChange={(e) => setEditFormData({ ...editFormData, comment_cta: e.target.value })}
-                                    readOnly={isViewOnly}
-                                    placeholder="Nội dung bình luận điều hướng khách hàng..."
-                                    className="min-h-[100px] bg-sky-50/30 border-none rounded-2xl py-3 font-medium text-xs leading-relaxed resize-none focus-visible:ring-primary/20"
-                                />
+                                <div className="space-y-0.5 text-left mt-1">
+                                    <DialogTitle className="text-xl font-display font-extrabold text-slate-800 tracking-tight">
+                                        {isViewOnly ? "Chi tiết nội dung" : "Biên tập bài viết"}
+                                    </DialogTitle>
+                                    <p className="text-[10px] font-bold uppercase tracking-[0.15em] text-slate-400">
+                                        {isViewOnly ? "Xem thông tin lưu trữ" : "Tối ưu hóa nội dung AI & Marketing"}
+                                    </p>
+                                </div>
                             </div>
-                        </div>
+                        </DialogHeader>
 
-                            <div className="space-y-6">
+                        {/* Body Dialog - Layout 2 cột */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
+                            
+                            {/* CỘT TRÁI */}
+                            <div className="space-y-5">
                                 <div className="space-y-2">
-                                    <label className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground/60 ml-1">Link Shopee Sản phẩm</label>
-                                    <div className="relative">
-                                        <ExternalLink className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-primary/40" />
+                                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1 block">Tiêu đề bài viết</label>
+                                    <Input 
+                                        value={editFormData.title}
+                                        onChange={(e) => setEditFormData({ ...editFormData, title: e.target.value })}
+                                        readOnly={isViewOnly}
+                                        className="h-12 bg-slate-50 border border-slate-200/60 rounded-2xl px-4 font-semibold text-sm text-slate-800 focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary/30 transition-all shadow-sm"
+                                    />
+                                </div>
+
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1 block">Nội dung bài viết</label>
+                                    <Textarea 
+                                        value={editFormData.content}
+                                        onChange={(e) => setEditFormData({ ...editFormData, content: e.target.value })}
+                                        readOnly={isViewOnly}
+                                        placeholder="Nội dung chính của bài viết..."
+                                        className="min-h-[160px] bg-slate-50 border border-slate-200/60 rounded-2xl p-4 font-medium text-sm text-slate-700 leading-relaxed resize-none focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary/30 transition-all shadow-sm custom-scrollbar"
+                                    />
+                                </div>
+
+                                {!isViewOnly && (
+                                    <div className="p-5 bg-amber-50/50 rounded-2xl border border-amber-100 space-y-4">
+                                        <div className="flex items-center gap-2 text-amber-600">
+                                            <Sparkles className="w-4 h-4" />
+                                            <span className="text-[10px] font-black uppercase tracking-widest">Tiếp thị Affiliate (CTA)</span>
+                                        </div>
+                                        
+                                        <div className="grid grid-cols-2 gap-3">
+                                            <Select value={selectedProductId} onValueChange={(v) => v && setSelectedProductId(v)}>
+                                                <SelectTrigger className="h-11 w-full bg-white border border-amber-100/50 rounded-xl text-xs font-semibold shadow-sm overflow-hidden">
+                                                    <SelectValue placeholder="Chọn sản phẩm...">
+                                                        <span className="truncate">
+                                                            {products.find(p => p.id.toString() === selectedProductId)?.name}
+                                                        </span>
+                                                    </SelectValue>
+                                                </SelectTrigger>
+                                                <SelectContent className="rounded-xl border-none shadow-xl">
+                                                    {products.map(p => (
+                                                        <SelectItem key={p.id} value={p.id.toString()}>{p.name}</SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+
+                                            <Select value={selectedCtaPromptId} onValueChange={(v) => v && setSelectedCtaPromptId(v)}>
+                                                <SelectTrigger className="h-11 w-full bg-white border border-amber-100/50 rounded-xl text-xs font-semibold shadow-sm overflow-hidden">
+                                                    <SelectValue placeholder="Mẫu CTA...">
+                                                        <span className="truncate">
+                                                            {ctaPrompts.find(p => p.id.toString() === selectedCtaPromptId)?.name}
+                                                        </span>
+                                                    </SelectValue>
+                                                </SelectTrigger>
+                                                <SelectContent className="rounded-xl border-none shadow-xl">
+                                                    {ctaPrompts.map(p => (
+                                                        <SelectItem key={p.id} value={p.id.toString()}>{p.name}</SelectItem>
+                                                    ))}
+                                                </SelectContent>
+                                            </Select>
+                                        </div>
+
+                                        <Button 
+                                            onClick={handleGenerateCTA}
+                                            disabled={isGeneratingCTA || !selectedProductId}
+                                            className="w-full h-11 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold text-[10px] uppercase tracking-widest gap-2 shadow-sm transition-all"
+                                        >
+                                            {isGeneratingCTA ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                                            Sinh bình luận
+                                        </Button>
+                                    </div>
+                                )}
+
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1 block">Bình luận CTA / Link</label>
+                                    <Textarea 
+                                        value={editFormData.comment_cta}
+                                        onChange={(e) => setEditFormData({ ...editFormData, comment_cta: e.target.value })}
+                                        readOnly={isViewOnly}
+                                        placeholder="Nội dung bình luận điều hướng..."
+                                        className="min-h-[100px] bg-slate-50 border border-slate-200/60 rounded-2xl p-4 font-medium text-sm text-slate-700 leading-relaxed resize-none focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary/30 transition-all shadow-sm custom-scrollbar"
+                                    />
+                                </div>
+                            </div>
+
+                            {/* CỘT PHẢI */}
+                            <div className="space-y-5 flex flex-col">
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1 block">Link Shopee Sản phẩm</label>
+                                    <div className="relative group">
+                                        <ExternalLink className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 group-focus-within:text-primary transition-colors" />
                                         <Input 
                                             value={editFormData.shopee_link}
                                             onChange={(e) => setEditFormData({ ...editFormData, shopee_link: e.target.value })}
                                             readOnly={isViewOnly}
                                             placeholder="https://shope.ee/..."
-                                            className="h-12 pl-12 bg-sky-50/50 border-none rounded-2xl font-bold text-sm focus-visible:ring-primary/20 text-sky-700"
+                                            className="h-12 pl-11 bg-slate-50 border border-slate-200/60 rounded-2xl font-semibold text-sm text-sky-700 focus-visible:bg-white focus-visible:ring-2 focus-visible:ring-primary/20 focus-visible:border-primary/30 transition-all shadow-sm"
                                         />
                                     </div>
-                                    <p className="text-[10px] text-muted-foreground italic ml-1 opacity-60">AI sẽ dùng link này để viết lời giới thiệu sản phẩm.</p>
                                 </div>
 
-                                <label className="text-[10px] font-black uppercase tracking-[0.2em] text-muted-foreground/60 ml-1">Tài nguyên đính kèm</label>
-                            <div className="aspect-square bg-surface-low rounded-3xl overflow-hidden border border-border/5 shadow-inner flex items-center justify-center relative group">
-                                {editingPost?.media_path ? (
-                                    editingPost.media_path.toLowerCase().endsWith('.mp4') || editingPost.media_path.toLowerCase().endsWith('.mov') ? (
-                                        <video 
-                                            src={`media://local-file?path=${encodeURIComponent(editingPost.media_path)}`}
-                                            className="w-full h-full object-cover"
-                                            controls
-                                        />
-                                    ) : (
-                                        <img 
-                                            src={`media://local-file?path=${encodeURIComponent(editingPost.media_path)}`}
-                                            className="w-full h-full object-cover"
-                                        />
-                                    )
-                                ) : (
-                                    <FileText className="w-16 h-16 text-muted-foreground/10" />
-                                )}
-                            </div>
-                            <div className="p-4 bg-surface-low rounded-2xl space-y-3">
-                                <div className="flex justify-between items-center text-[10px] font-bold">
-                                    <span className="text-muted-foreground uppercase opacity-60">Trạng thái</span>
-                                    <Badge className={cn("px-2 py-0 border-none", editingPost ? getStatusInfo(editingPost.status).color : "")}>
-                                        {editingPost ? getStatusInfo(editingPost.status).label : ""}
-                                    </Badge>
+                                <div className="space-y-2">
+                                    <label className="text-[10px] font-bold uppercase tracking-widest text-slate-500 ml-1 block">Tài nguyên đính kèm</label>
+                                    <div className="aspect-[4/3] bg-black/95 rounded-2xl overflow-hidden border border-slate-100 shadow-sm flex items-center justify-center relative group">
+                                        {editingPost?.media_path ? (
+                                            editingPost.media_path.toLowerCase().endsWith('.mp4') || editingPost.media_path.toLowerCase().endsWith('.mov') ? (
+                                                <video 
+                                                    src={`media://local-file?path=${encodeURIComponent(editingPost.media_path)}`}
+                                                    className="w-full h-full object-contain"
+                                                    controls
+                                                />
+                                            ) : (
+                                                <img 
+                                                    src={`media://local-file?path=${encodeURIComponent(editingPost.media_path)}`}
+                                                    className="w-full h-full object-cover"
+                                                />
+                                            )
+                                        ) : (
+                                            <div className="flex flex-col items-center gap-2 opacity-30">
+                                                <FileText className="w-10 h-10 text-white" />
+                                                <span className="text-[10px] font-bold text-white uppercase tracking-widest">Trống</span>
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
-                                <div className="flex justify-between items-center text-[10px] font-bold">
-                                    <span className="text-muted-foreground uppercase opacity-60">Ngày tạo</span>
-                                    <span className="text-foreground">{editingPost ? formatTime(editingPost.created_at) : "---"}</span>
+
+                                <div className="mt-auto p-4 bg-slate-50 border border-slate-200/60 rounded-2xl space-y-3">
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Trạng thái</span>
+                                        <Badge className={cn("px-2.5 py-0.5 border-none shadow-sm text-[10px] font-semibold", editingPost ? getStatusInfo(editingPost.status).color : "")}>
+                                            {editingPost ? getStatusInfo(editingPost.status).label : ""}
+                                        </Badge>
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">Ngày tạo</span>
+                                        <span className="text-xs font-bold text-slate-700">{editingPost ? formatTime(editingPost.created_at) : "---"}</span>
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
 
-                    <DialogFooter className="gap-3 sm:justify-start">
-                        {!isViewOnly ? (
+                        {/* Footer Actions */}
+                        <div className="pt-6 border-t border-slate-100 flex gap-3">
+                            {!isViewOnly && (
+                                <Button 
+                                    onClick={handleUpdate} 
+                                    disabled={isUpdating}
+                                    className="h-12 flex-1 bg-primary hover:bg-primary/90 text-white rounded-2xl font-bold text-[11px] uppercase tracking-widest shadow-sm transition-all disabled:opacity-50 gap-2"
+                                >
+                                    {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                                    Lưu thay đổi
+                                </Button>
+                            )}
                             <Button 
-                                onClick={handleUpdate} 
-                                disabled={isUpdating}
-                                className="primary-gradient h-12 px-8 rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-primary/20 gap-2 flex-1 sm:flex-none"
+                                variant="ghost" 
+                                onClick={() => setIsEditOpen(false)}
+                                className={cn(
+                                    "h-12 rounded-2xl font-bold text-[11px] uppercase tracking-widest transition-colors",
+                                    isViewOnly 
+                                        ? "w-full bg-slate-100 hover:bg-slate-200 text-slate-700" 
+                                        : "px-8 bg-slate-50 hover:bg-slate-100 text-slate-600"
+                                )}
                             >
-                                {isUpdating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                                <span>Lưu thay đổi</span>
+                                {isViewOnly ? "Đóng" : "Hủy bỏ"}
                             </Button>
-                        ) : null}
-                        <Button 
-                            variant="ghost" 
-                            onClick={() => setIsEditOpen(false)}
-                            className="h-12 px-8 rounded-2xl font-black text-xs uppercase tracking-widest bg-surface-low hover:bg-surface-mid flex-1 sm:flex-none"
-                        >
-                            {isViewOnly ? "Đóng" : "Hủy bỏ"}
-                        </Button>
-                    </DialogFooter>
+                        </div>
+                    </div>
                 </DialogContent>
             </Dialog>
 

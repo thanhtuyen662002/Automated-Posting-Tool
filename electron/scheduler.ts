@@ -1,4 +1,5 @@
 import { dbService, Post, ScheduleSettings } from './db'
+import { POST_STATUS } from './post_status'
 
 export class Scheduler {
     /**
@@ -26,7 +27,7 @@ export class Scheduler {
             
         const minInterval = settings?.min_interval || 30
         const maxPostsPerDay = settings?.max_posts_per_day || 3
-        const posts = dbService.getPostsByStatus('approved').filter((p: Post) => p.project_id === projectId)
+        const posts = dbService.getPostsByStatus(POST_STATUS.APPROVED).filter((p: Post) => p.project_id === projectId)
  
         if (posts.length === 0) return { count: 0 }
 
@@ -54,9 +55,66 @@ export class Scheduler {
         const sessionPageUsage: Record<string, Set<number>> = {}   // "dayIndex-winIndex" -> Set of page_ids
         const dailyPageCount: Record<string, number> = {}           // "dayIndex-pageId" -> Count
 
+        const now = new Date()
+        const nowStartOfDay = new Date(now)
+        nowStartOfDay.setHours(0, 0, 0, 0)
+
+        // 2.1 PRE-FILL trackers with EXISTING scheduled posts to prevent overlap
+        const existingScheduledPosts = dbService.getPostsByStatus(POST_STATUS.SCHEDULED)
+        
+        for (const sp of existingScheduledPosts) {
+            if (!sp.scheduled_at) continue;
+            const postTime = new Date(sp.scheduled_at)
+            
+            // We only care about posts today or in the future
+            if (postTime < nowStartOfDay) continue;
+
+            const postStartOfDay = new Date(postTime)
+            postStartOfDay.setHours(0, 0, 0, 0)
+            
+            const localDayOffset = Math.round((postStartOfDay.getTime() - nowStartOfDay.getTime()) / 86400000)
+            if (localDayOffset < 0) continue;
+
+            // Track last scheduled time
+            if (!lastScheduledTimePerPage[sp.page_id] || lastScheduledTimePerPage[sp.page_id] < postTime.getTime()) {
+                lastScheduledTimePerPage[sp.page_id] = postTime.getTime()
+            }
+
+            // Track daily page count
+            const dailyKey = `${localDayOffset}-${sp.page_id}`
+            dailyPageCount[dailyKey] = (dailyPageCount[dailyKey] || 0) + 1
+
+            // Track session usage by determining winIdx
+            let matchedWinIdx = -1;
+            for (let i = 0; i < timeWindows.length; i++) {
+                const [startStr, endStr] = timeWindows[i].split('-')
+                const [startH, startM] = startStr.split(':').map(Number)
+                const [endH, endM] = endStr.split(':').map(Number)
+                
+                const winStart = new Date(postStartOfDay)
+                winStart.setHours(startH, startM, 0, 0)
+                const winEnd = new Date(postStartOfDay)
+                winEnd.setHours(endH, endM, 0, 0)
+
+                // If the post time falls within or very close to this window
+                if (postTime >= winStart && postTime <= winEnd) {
+                    matchedWinIdx = i;
+                    break;
+                }
+            }
+
+            if (matchedWinIdx !== -1) {
+                const sessionKey = `${localDayOffset}-${matchedWinIdx}`
+                if (!sessionMediaUsage[sessionKey]) sessionMediaUsage[sessionKey] = new Set()
+                if (!sessionPageUsage[sessionKey]) sessionPageUsage[sessionKey] = new Set()
+                
+                sessionMediaUsage[sessionKey].add(sp.media_path)
+                sessionPageUsage[sessionKey].add(sp.page_id)
+            }
+        }
+
         let scheduledCount = 0
         let dayOffset = 0
-        const now = new Date()
 
         // 3. Allocation Loop
         // We iterate through posts and find the first available slot that fits constraints
@@ -111,7 +169,7 @@ export class Scheduler {
 
                     // If candidate time is still within window, we found it!
                     if (candidateTime < winEnd) {
-                        dbService.updatePostSchedule(post.id, candidateTime.toISOString(), 'scheduled')
+                        dbService.updatePostSchedule(post.id, candidateTime.toISOString(), POST_STATUS.SCHEDULED)
                         
                         // Update trackers
                         lastScheduledTimePerPage[post.page_id] = candidateTime.getTime()

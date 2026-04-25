@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useState, useRef } from 'react'
 import { 
     Sparkles, 
     FolderSearch, 
@@ -8,18 +8,21 @@ import {
     Plus,
     CheckCircle2,
     FileVideo,
-    Send,
-    Edit3,
-    Trash2,
-    Wand2,
-    MessageCircle,
     Loader2,
     Check,
     CheckSquare,
     Folders,
     Zap,
-    FolderSync
+    RefreshCw,
+    UserCircle,
+    Key,
+    ShieldCheck,
+    FolderSync,
+    Wand2,
+    Trash2
 } from 'lucide-react'
+import { Switch } from '@/components/ui/switch'
+import { Slider } from '@/components/ui/slider'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -50,12 +53,22 @@ export const ContentStudioView: React.FC = () => {
     const [products, setProducts] = useState<any[]>([])
     const [activeGroup, setActiveGroup] = useState<any>(null)
     const [selectedPromptId, setSelectedPromptId] = useState('')
-    const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([])
     const [keyword, setKeyword] = useState('')
+    const [selectedProductId, setSelectedProductId] = useState('')
     const [isGenerating, setIsGenerating] = useState(false)
     const [isAutoGenerating, setIsAutoGenerating] = useState(false)
     const [genStatus, setGenStatus] = useState('')
-    const [generatedResult, setGeneratedResult] = useState({ title: '', body: '', hashtags: '', comment: '' })
+    const [generatedResults, setGeneratedResults] = useState<Record<number, { title: string, body: string, hashtags: string, comment: string }>>({})
+    const [selectedPageIds, setSelectedPageIds] = useState<number[]>([])
+    const [availablePages, setAvailablePages] = useState<any[]>([])
+    const [automationLogs, setAutomationLogs] = useState<string[]>([])
+    const logContainerRef = useRef<HTMLDivElement>(null)
+
+    // Watermark settings
+    const [watermarkEnabled, setWatermarkEnabled] = useState(true)
+    const [watermarkPos, setWatermarkPos] = useState<'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'>('top-right')
+    const [watermarkSize, setWatermarkSize] = useState(0.12)
+    const [watermarkOpacity, setWatermarkOpacity] = useState(0.8)
 
     const [deleteGroupId, setDeleteGroupId] = useState<number | null>(null)
     const [isDeletingGroup, setIsDeletingGroup] = useState(false)
@@ -71,6 +84,8 @@ export const ContentStudioView: React.FC = () => {
             setPrompts(pms || [])
             const prods = await window.ipcRenderer.getProducts()
             setProducts(prods || [])
+            const pgs = await window.ipcRenderer.getPages()
+            setAvailablePages(pgs || [])
         } catch (e) {
             console.error('Fetch data error:', e)
         }
@@ -83,15 +98,30 @@ export const ContentStudioView: React.FC = () => {
                 setAutomationRoot(root)
             })
 
+            // Listen for automation logs
+            const handleLog = (msg: string) => {
+                setAutomationLogs(prev => [...prev.slice(-99), `[${new Date().toLocaleTimeString()}] ${msg}`])
+            }
+            const cleanupLog = window.ipcRenderer.onEngineLog(handleLog)
+
             // Poll for generation status
             const interval = setInterval(async () => {
                 const status = await window.ipcRenderer.getAutomationGenStatus()
                 setIsAutoGenerating(status.isGenerating)
                 setGenStatus(status.status)
             }, 2000)
-            return () => clearInterval(interval)
+            return () => {
+                clearInterval(interval)
+                if (cleanupLog) cleanupLog()
+            }
         }
     }, [])
+
+    useEffect(() => {
+        if (logContainerRef.current) {
+            logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
+        }
+    }, [automationLogs])
 
     const handleScan = async () => {
         setScanning(true)
@@ -175,46 +205,57 @@ export const ContentStudioView: React.FC = () => {
     }
 
     const handleGenerateContent = async () => {
-        if (!selectedPromptId || !activeGroup) {
-            toast.error('Vui lòng chọn Prompt và Nhóm nội dung')
+        if (!selectedPromptId || !activeGroup || selectedPageIds.length === 0) {
+            toast.error('Vui lòng chọn Prompt, Nhóm nội dung và ít nhất 1 Trang mục tiêu')
             return
         }
         
-        const mediaFiles = JSON.parse(activeGroup.media_files)
-        const finalKeyword = keyword.trim() || mediaFiles[0].split(/[\\\/]/).pop()?.split('.')[0] || 'Nội dung mới'
-        
         setIsGenerating(true)
+        setGeneratedResults({})
+        
         try {
-            const content = await window.ipcRenderer.generatePost({
-                promptId: Number(selectedPromptId),
-                keyword: finalKeyword
+            const targetPages = availablePages.filter(p => selectedPageIds.includes(p.id))
+            
+            // Trigger Batch Generation via IPC
+            const batchResults = await window.ipcRenderer.generateBatchPosts({
+                pages: targetPages,
+                projectId: activeGroup.project_id,
+                activeGroup,
+                selectedPromptId,
+                selectedProductId,
+                keyword
             })
             
-            // Advanced cleaning and parsing logic
-            const clean = (text: string) => {
-                if (!text) return '';
-                return text
-                    .replace(/\*\*/g, '')
-                    .replace(/^(Tiêu đề|Nội dung|Hashtags|Title|Body|Content):\s*/i, '')
-                    .trim();
-            };
-
-            const lines = content.split('\n').filter(l => l.trim().length > 0)
-            const titleLine = lines.find(l => /^(Tiêu đề|Title):/i.test(l)) || lines[0]
-            const hashtagLine = lines.find(l => /^(Hashtags|#)/i.test(l)) || lines[lines.length - 1]
+            const newResults: Record<number, any> = {}
+            const platforms = ['Facebook', 'TikTok', 'YouTube']
             
-            // The body is anything that is NOT the title line and NOT the hashtag line
-            const bodyLines = lines.filter(l => l !== titleLine && l !== hashtagLine)
-
-            setGeneratedResult({
-                title: clean(titleLine),
-                body: bodyLines.length > 0 ? bodyLines.map(l => clean(l)).join('\n') : clean(content),
-                hashtags: clean(hashtagLine).startsWith('#') ? clean(hashtagLine) : `#${clean(hashtagLine)}`,
-                comment: ''
+            platforms.forEach(plat => {
+                const posts = batchResults[plat] || []
+                posts.forEach((p: any) => {
+                    const pageId = p.pageId || p.id
+                    const targetPage = targetPages.find(tp => tp.id === Number(pageId) || tp.page_name === p.pageName)
+                    
+                    if (targetPage) {
+                        newResults[targetPage.id] = {
+                            title: p.title || '',
+                            body: p.content || '',
+                            hashtags: p.hashtags || '',
+                            comment: p.comment || ''
+                        }
+                    }
+                })
             })
-            toast.success('AI đã sinh nội dung thành công')
+            
+            setGeneratedResults(newResults)
+            const count = Object.keys(newResults).length
+            if (count > 0) {
+                toast.success(`Đã sinh ${count}/${selectedPageIds.length} bản tin thông minh thành công`)
+            } else {
+                toast.error('Không thể sinh nội dung. Vui lòng kiểm tra lại AI Key hoặc quy định JSON.')
+            }
         } catch (e: any) {
-            toast.error('Lỗi AI: ' + e.message)
+            toast.error('Lỗi AI Batch: ' + e.message)
+            console.error(e)
         } finally {
             setIsGenerating(false)
         }
@@ -226,8 +267,8 @@ export const ContentStudioView: React.FC = () => {
         const options: any = {}
         if (activeGroup) {
             options.groupIds = [activeGroup.id]
-        } else if (selectedProjectIds.length > 0) {
-            options.projectIds = selectedProjectIds.map(Number)
+        } else if (selectedPageIds.length > 0) {
+            options.pageIds = selectedPageIds
         }
 
         try {
@@ -410,7 +451,7 @@ export const ContentStudioView: React.FC = () => {
                                 <div className="space-y-4">
                                     <div className="space-y-1.5">
                                         <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1">Thuộc Dự án</label>
-                                        <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
+                                        <Select value={selectedProjectId} onValueChange={(v) => v && setSelectedProjectId(v)}>
                                             <SelectTrigger className="w-full bg-surface-low border-none rounded-xl h-12 px-4 font-bold text-sm">
                                                 <SelectValue placeholder="Chọn dự án...">
                                                     {projects.find(p => p.id.toString() === selectedProjectId)?.name || "Chọn dự án..."}
@@ -542,6 +583,34 @@ export const ContentStudioView: React.FC = () => {
                                     </Badge>
                                 </div>
 
+                                {/* Log Terminal */}
+                                <div className="mb-6 p-4 bg-slate-900 rounded-2xl font-mono text-[10px] text-emerald-400 overflow-hidden border border-slate-800 shadow-inner">
+                                    <div className="flex items-center justify-between mb-2 pb-2 border-b border-white/5">
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
+                                            <span className="font-bold uppercase tracking-wider text-emerald-500/80">Nhật ký Robot</span>
+                                        </div>
+                                        <button 
+                                            onClick={() => setAutomationLogs([])}
+                                            className="text-white/20 hover:text-white/40 transition-colors"
+                                        >
+                                            Xóa log
+                                        </button>
+                                    </div>
+                                    <div 
+                                        ref={logContainerRef}
+                                        className="h-32 overflow-y-auto pr-2 custom-scrollbar space-y-1"
+                                    >
+                                        {automationLogs.length === 0 ? (
+                                            <p className="opacity-30 italic">Đang chờ lệnh từ Robot...</p>
+                                        ) : (
+                                            automationLogs.map((log, i) => (
+                                                <p key={i} className="leading-relaxed border-l-2 border-emerald-500/20 pl-2">{log}</p>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+
                                 <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-3">
                                     {groups.map((g: any, i) => (
                                         <div key={i} className="p-5 bg-surface-container-low rounded-[1.5rem] flex items-center justify-between group hover:bg-surface-mid transition-all border-2 border-transparent hover:border-primary/5">
@@ -631,12 +700,12 @@ export const ContentStudioView: React.FC = () => {
                                         </Select>
                                     </div>
                                     <div className="space-y-1.5">
-                                        <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1">2. Dự án xử lý (Trống = Tự động)</label>
+                                        <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1">2. Trang mục tiêu (Bắt buộc)</label>
                                         <Dialog>
                                             <DialogTrigger>
                                                 <Button variant="outline" className="w-full bg-surface-low border-none rounded-xl h-11 px-4 justify-between font-bold text-xs overflow-hidden">
                                                     <span className="truncate">
-                                                        {selectedProjectIds.length === 0 ? "Tự chọn dự án chưa có bài" : `Đã chọn ${selectedProjectIds.length} dự án`}
+                                                        {selectedPageIds.length === 0 ? "Chọn các Trang mục tiêu..." : `Đã chọn ${selectedPageIds.length} trang`}
                                                     </span>
                                                     <ChevronRight className="w-4 h-4 opacity-50 rotate-90 shrink-0" />
                                                 </Button>
@@ -646,59 +715,49 @@ export const ContentStudioView: React.FC = () => {
                                             </p>
                                             <DialogContent className="max-w-md bg-white border-none rounded-[2.5rem] p-10 shadow-[0_32px_64px_-12px_rgba(0,0,0,0.2)] overflow-hidden animate-in zoom-in-95 duration-300">
                                                 <DialogHeader className="space-y-3">
-                                                    <DialogTitle className="text-2xl font-display font-extrabold">Danh sách Dự án</DialogTitle>
+                                                    <DialogTitle className="text-2xl font-display font-extrabold">Danh sách Trang mục tiêu</DialogTitle>
                                                     <DialogDescription className="text-sm text-muted-foreground">
-                                                        Chọn các dự án bạn muốn sinh nội dung đồng thời. Những dự án có thẻ <Badge variant="outline" className="text-[8px] bg-emerald-50 text-emerald-600 border-none ml-1">TRỐNG</Badge> là dự án chưa có bài viết.
+                                                        Chọn các trang bạn muốn đăng bài. AI sẽ sinh nội dung riêng biệt cho từng trang.
                                                     </DialogDescription>
                                                 </DialogHeader>
                                                 
                                                 <div className="mt-6 space-y-4">
                                                     <div className="flex items-center justify-between px-2">
-                                                        <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">Tên dự án</span>
-                                                        <Button 
-                                                            variant="ghost" 
-                                                            size="sm" 
-                                                            className="h-7 text-[10px] font-bold text-primary hover:bg-primary/5 rounded-lg px-3"
-                                                            onClick={() => {
-                                                                const emptyProjects = projects.filter(p => !p.posts_count || Number(p.posts_count) === 0)
-                                                                setSelectedProjectIds(emptyProjects.map(p => p.id.toString()))
-                                                            }}
-                                                        >
-                                                            Chọn dự án trống
-                                                        </Button>
+                                                        <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60">Trang cá nhân / Fanpage</span>
                                                     </div>
                                                     
                                                     <ScrollArea className="h-[400px] -mx-2 px-2">
                                                         <div className="space-y-2">
-                                                            {projects.map(p => (
+                                                            {availablePages.map(pg => (
                                                                 <div 
-                                                                    key={p.id} 
+                                                                    key={pg.id} 
                                                                     className={cn(
                                                                         "flex items-center gap-4 p-4 rounded-2xl cursor-pointer transition-all border-2",
-                                                                        selectedProjectIds.includes(p.id.toString()) 
+                                                                        selectedPageIds.includes(pg.id) 
                                                                             ? "bg-primary/5 border-primary/20" 
                                                                             : "bg-surface-low border-transparent hover:bg-surface-mid"
                                                                     )}
                                                                     onClick={() => {
-                                                                        const idStr = p.id.toString()
-                                                                        setSelectedProjectIds(prev => 
-                                                                            prev.includes(idStr) ? prev.filter(x => x !== idStr) : [...prev, idStr]
+                                                                        setSelectedPageIds(prev => 
+                                                                            prev.includes(pg.id) ? prev.filter(x => x !== pg.id) : [...prev, pg.id]
                                                                         )
                                                                     }}
                                                                 >
                                                                     <Checkbox 
-                                                                        checked={selectedProjectIds.includes(p.id.toString())}
+                                                                        checked={selectedPageIds.includes(pg.id)}
                                                                         className="w-5 h-5 border-primary/20 data-[state=checked]:bg-primary"
                                                                     />
-                                                                    <div className="flex-1 overflow-hidden">
-                                                                        <p className="text-sm font-bold truncate">{p.name}</p>
-                                                                        <div className="flex items-center gap-2 mt-1">
-                                                                            <span className="text-[10px] text-muted-foreground uppercase font-medium">
-                                                                                {p.posts_count || 0} bài đăng
-                                                                            </span>
-                                                                            {(!p.posts_count || Number(p.posts_count) === 0) && (
-                                                                                <Badge variant="outline" className="text-[8px] h-4 bg-emerald-50 text-emerald-600 border-none font-bold">TRỐNG</Badge>
+                                                                    <div className="flex-1 overflow-hidden flex items-center gap-3">
+                                                                        <div className="w-8 h-8 rounded-full bg-surface-container overflow-hidden border border-border/10">
+                                                                            {pg.avatar_url ? (
+                                                                                <img src={pg.avatar_url} className="w-full h-full object-cover" />
+                                                                            ) : (
+                                                                                <UserCircle className="w-full h-full text-muted-foreground/30 p-1" />
                                                                             )}
+                                                                        </div>
+                                                                        <div className="flex-1">
+                                                                            <p className="text-sm font-bold truncate">{pg.page_name}</p>
+                                                                            <p className="text-[9px] text-muted-foreground uppercase">{pg.platform} • {pg.handle || 'N/A'}</p>
                                                                         </div>
                                                                     </div>
                                                                 </div>
@@ -718,7 +777,7 @@ export const ContentStudioView: React.FC = () => {
 
                                     <div className="space-y-1.5">
                                         <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1">3. Mẫu Prompt</label>
-                                        <Select value={selectedPromptId} onValueChange={setSelectedPromptId}>
+                                        <Select value={selectedPromptId} onValueChange={(v) => v && setSelectedPromptId(v)}>
                                             <SelectTrigger className="w-full bg-surface-low border-none rounded-xl h-11 px-4 font-bold text-xs">
                                                 <SelectValue placeholder="Chọn kịch bản AI...">
                                                     {prompts.find(p => p.id.toString() === selectedPromptId)?.name || "Chọn kịch bản AI..."}
@@ -740,6 +799,27 @@ export const ContentStudioView: React.FC = () => {
                                                 </SelectGroup>
                                             </SelectContent>
                                         </Select>
+
+                                        {/* Placeholder Legend */}
+                                        <div className="mt-2 p-3 bg-surface-container-low/50 rounded-xl border border-border/5 space-y-2">
+                                            <p className="text-[9px] font-black uppercase tracking-tighter text-muted-foreground flex items-center gap-1.5">
+                                                <Key className="w-3 h-3 text-amber-500" /> Danh sách Thẻ dùng chung:
+                                            </p>
+                                            <div className="grid grid-cols-1 gap-1">
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <code className="text-primary font-bold bg-primary/5 px-1.5 py-0.5 rounded cursor-pointer hover:bg-primary/10" onClick={() => {navigator.clipboard.writeText('[TÊN_SẢN_PHẨM]'); toast.success('Đã copy thẻ Tên')}}>[TÊN_SẢN_PHẨM]</code>
+                                                    <span className="text-muted-foreground opacity-60">Tên SP</span>
+                                                </div>
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <code className="text-primary font-bold bg-primary/5 px-1.5 py-0.5 rounded cursor-pointer hover:bg-primary/10" onClick={() => {navigator.clipboard.writeText('[LINK_SẢN_PHẨM]'); toast.success('Đã copy thẻ Link')}}>[LINK_SẢN_PHẨM]</code>
+                                                    <span className="text-muted-foreground opacity-60">Link SP</span>
+                                                </div>
+                                                <div className="flex items-center justify-between text-[10px]">
+                                                    <code className="text-primary font-bold bg-primary/5 px-1.5 py-0.5 rounded cursor-pointer hover:bg-primary/10" onClick={() => {navigator.clipboard.writeText('[TỪ_KHÓA]'); toast.success('Đã copy thẻ Từ khóa')}}>[TỪ_KHÓA]</code>
+                                                    <span className="text-muted-foreground opacity-60">Từ khóa</span>
+                                                </div>
+                                            </div>
+                                        </div>
                                     </div>
                                     <div className="space-y-1.5">
                                         <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1">4. Từ khóa (Mặc định: Tên file)</label>
@@ -749,6 +829,97 @@ export const ContentStudioView: React.FC = () => {
                                             placeholder="Gốc: Tên tài nguyên" 
                                             className="bg-surface-low border-none rounded-xl h-11 text-xs"
                                         />
+                                    </div>
+                                    <div className="space-y-1.5">
+                                        <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1">5. Sản phẩm liên kết (Tùy chọn)</label>
+                                        <Select value={selectedProductId} onValueChange={(v) => v && setSelectedProductId(v)}>
+                                            <SelectTrigger className="w-full bg-surface-low border-none rounded-xl h-11 px-4 font-bold text-xs">
+                                                <SelectValue placeholder="Không gắn sản phẩm">
+                                                    {products.find(p => p.id.toString() === selectedProductId)?.name || "Không gắn sản phẩm"}
+                                                </SelectValue>
+                                            </SelectTrigger>
+                                            <SelectContent className="bg-white border-border/10">
+                                                <SelectGroup>
+                                                    <SelectLabel>Sản phẩm của bạn</SelectLabel>
+                                                    <SelectItem value="0" className="italic text-muted-foreground">Bỏ chọn sản phẩm</SelectItem>
+                                                    {products.map(p => (
+                                                        <SelectItem key={p.id} value={p.id.toString()} className="font-bold">
+                                                            {p.name}
+                                                        </SelectItem>
+                                                    ))}
+                                                </SelectGroup>
+                                            </SelectContent>
+                                        </Select>
+                                        {selectedProductId && selectedProductId !== '0' && (
+                                            <p className="text-[9px] text-primary font-bold ml-1 animate-in fade-in">
+                                                * AI sẽ tự động điền thông tin và link Shopee vào bài viết.
+                                            </p>
+                                        )}
+                                    </div>
+
+                                    {/* Watermark Config */}
+                                    <div className="pt-4 border-t border-border/5 space-y-4">
+                                        <div className="flex items-center justify-between">
+                                            <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1 flex items-center gap-2">
+                                                <ShieldCheck className="w-3.5 h-3.5 text-primary" /> Tự động chèn Watermark
+                                            </label>
+                                            <Switch 
+                                                checked={watermarkEnabled} 
+                                                onCheckedChange={setWatermarkEnabled}
+                                                className="data-[state=checked]:bg-primary"
+                                            />
+                                        </div>
+                                        
+                                        {watermarkEnabled && (
+                                            <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-300">
+                                                <div className="space-y-1.5">
+                                                    <label className="text-[9px] font-bold text-muted-foreground uppercase ml-1 opacity-60">Vị trí chèn</label>
+                                                    <div className="grid grid-cols-2 gap-2">
+                                                        {['top-left', 'top-right', 'bottom-left', 'bottom-right'].map(pos => (
+                                                            <button 
+                                                                key={pos}
+                                                                onClick={() => setWatermarkPos(pos as any)}
+                                                                className={cn(
+                                                                    "px-2 py-1.5 rounded-lg border text-[8px] font-black uppercase transition-all tracking-tighter",
+                                                                    watermarkPos === pos ? "bg-primary text-white border-primary" : "bg-surface-low border-transparent text-muted-foreground"
+                                                                )}
+                                                            >
+                                                                {pos.replace('-', ' ')}
+                                                            </button>
+                                                        ))}
+                                                    </div>
+                                                </div>
+                                                <div className="flex gap-4">
+                                                    <div className="flex-1 space-y-1.5">
+                                                        <label className="text-[9px] font-bold text-muted-foreground uppercase ml-1 opacity-60 text-center block">Kích thước</label>
+                                                        <div className="px-2">
+                                                            <Slider 
+                                                                defaultValue={[watermarkSize]} 
+                                                                max={0.3} 
+                                                                step={0.01} 
+                                                                min={0.05}
+                                                                onValueChange={(val) => setWatermarkSize(val[0])}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex-1 space-y-1.5">
+                                                        <label className="text-[9px] font-bold text-muted-foreground uppercase ml-1 opacity-60 text-center block">Độ đậm</label>
+                                                        <div className="px-2">
+                                                            <Slider 
+                                                                defaultValue={[watermarkOpacity]} 
+                                                                max={1} 
+                                                                step={0.1} 
+                                                                min={0.2}
+                                                                onValueChange={(val) => setWatermarkOpacity(val[0])}
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <p className="text-[9px] text-muted-foreground leading-relaxed italic opacity-70">
+                                                    * Video sẽ được chèn Avatar và Tên Facebook tự động trước khi đăng.
+                                                </p>
+                                            </div>
+                                        )}
                                     </div>
                                 </div>
 
@@ -858,64 +1029,104 @@ export const ContentStudioView: React.FC = () => {
                                         <p className="text-muted-foreground max-w-sm mx-auto">Vui lòng chờ trong giây lát, Google Gemini đang phân tích bối cảnh và viết nội dung cho bạn...</p>
                                     </div>
                                 </Card>
-                            ) : generatedResult.title ? (
-                                <Card className="border-none shadow-none bg-surface-lowest rounded-[2.5rem] p-10 space-y-8 animate-in zoom-in-95 duration-500">
-                                    <div className="flex justify-between items-center pb-4 border-b border-border/10">
-                                        <div className="flex items-center gap-4">
-                                            <div className="w-12 h-12 bg-emerald-50 text-emerald-500 rounded-2xl flex items-center justify-center">
-                                                <CheckCircle2 className="w-6 h-6" />
-                                            </div>
-                                            <div>
-                                                <h3 className="text-xl font-bold">Kết quả Sáng tạo</h3>
-                                                <p className="text-[10px] font-bold uppercase text-muted-foreground tracking-widest">Mô hình: AI Core</p>
-                                            </div>
-                                        </div>
-                                        <div className="flex gap-2">
-                                            <Button variant="ghost" className="rounded-xl h-10 gap-2"><Edit3 className="w-4 h-4" /> Sửa</Button>
-                                            <Button className="primary-gradient rounded-xl h-10 gap-2 shadow-lg shadow-primary/20"><Send className="w-4 h-4" /> Phê duyệt & Đăng</Button>
-                                        </div>
-                                    </div>
+                            ) : Object.keys(generatedResults).length > 0 ? (
+                                <div className="space-y-6">
+                                    {selectedPageIds.map(pageId => {
+                                        const result = generatedResults[pageId]
+                                        const page = availablePages.find(pg => pg.id === pageId)
+                                        if (!result || !page) return null
 
-                                    <div className="grid gap-6">
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60 ml-1">Tiêu đề bài đăng</label>
-                                            <div className="p-4 bg-surface-low rounded-2xl font-bold text-lg">{generatedResult.title}</div>
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60 ml-1">Nội dung chính</label>
-                                            <div className="p-6 bg-surface-low rounded-2xl whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">{generatedResult.body}</div>
-                                        </div>
-                                        <div className="space-y-2">
-                                            <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/60 ml-1">Hashtags đề xuất</label>
-                                            <div className="p-3 bg-primary/5 text-primary rounded-xl font-medium text-xs">{generatedResult.hashtags}</div>
-                                        </div>
+                                        return (
+                                            <Card key={pageId} className="border-none shadow-none bg-surface-lowest rounded-[2.5rem] p-8 space-y-6 overflow-hidden animate-in slide-in-from-top-4 duration-300">
+                                                <div className="flex items-center justify-between border-b border-border/5 pb-4">
+                                                    <div className="flex items-center gap-3">
+                                                        <div className="w-10 h-10 rounded-full bg-surface-container overflow-hidden border border-border/10">
+                                                            {page.avatar_url ? (
+                                                                <img src={page.avatar_url} className="w-full h-full object-cover" />
+                                                            ) : (
+                                                                <UserCircle className="w-full h-full text-muted-foreground/30 p-1" />
+                                                            )}
+                                                        </div>
+                                                        <div>
+                                                            <p className="text-[10px] font-black uppercase tracking-widest text-primary">Biến thể cho trang:</p>
+                                                            <h4 className="font-bold text-sm">{page.page_name}</h4>
+                                                        </div>
+                                                    </div>
+                                                    <div className="flex gap-2">
+                                                        <Button variant="ghost" size="sm" className="h-8 text-[10px] items-center gap-1.5 font-bold" onClick={() => {
+                                                            toast.info('Tính năng sinh riêng lẻ đang phát triển')
+                                                        }}>
+                                                            <RefreshCw className="w-3 h-3" /> Sinh lại
+                                                        </Button>
+                                                    </div>
+                                                </div>
 
-                                        <div className="pt-6 border-t border-border/10 space-y-4">
-                                            <div className="flex items-center justify-between">
-                                                <div className="flex items-center gap-2">
-                                                    <MessageCircle className="w-4 h-4 text-sky-500" />
-                                                    <h4 className="font-bold text-sm">Bình luận mẫu (CTA)</h4>
+                                                <div className="space-y-6">
+                                                    <div className="space-y-2">
+                                                        <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1">Tiêu đề (Nổi bật)</label>
+                                                        <div className="p-4 bg-surface-low rounded-2xl font-bold text-base border-2 border-primary/5">
+                                                            {result.title}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="space-y-2">
+                                                        <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1">Nội dung bài viết</label>
+                                                        <div className="p-5 bg-surface-low rounded-2xl text-sm leading-relaxed whitespace-pre-wrap">
+                                                            {result.body}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="space-y-2">
+                                                        <label className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground ml-1">Hashtags</label>
+                                                        <div className="p-3 bg-primary/5 text-primary rounded-xl font-medium text-xs">
+                                                            {result.hashtags}
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="pt-4 border-t border-border/5 flex items-center justify-between">
+                                                        <div className="flex gap-2">
+                                                            <Button 
+                                                                variant="outline" 
+                                                                className="h-10 rounded-xl px-4 text-xs font-bold gap-2"
+                                                                onClick={async () => {
+                                                                    await window.ipcRenderer.addPost({
+                                                                        group_id: activeGroup.id,
+                                                                        page_id: pageId,
+                                                                        project_id: activeGroup.project_id,
+                                                                        title: result.title,
+                                                                        content: `${result.body}\n\n${result.hashtags}`,
+                                                                        media_path: activeGroup.media_files ? JSON.parse(activeGroup.media_files)[0] : '',
+                                                                        status: 'draft'
+                                                                    })
+                                                                    toast.success(`Đã lưu nháp cho ${page.page_name}`)
+                                                                }}
+                                                            >
+                                                                Lưu nháp
+                                                            </Button>
+                                                        </div>
+                                                        <Button 
+                                                            className="h-10 primary-gradient rounded-xl px-6 text-xs font-bold shadow-lg shadow-primary/20"
+                                                            onClick={async () => {
+                                                                await window.ipcRenderer.addPost({
+                                                                    group_id: activeGroup.id,
+                                                                    page_id: pageId,
+                                                                    project_id: activeGroup.project_id,
+                                                                    title: result.title,
+                                                                    content: `${result.body}\n\n${result.hashtags}`,
+                                                                    media_path: activeGroup.media_files ? JSON.parse(activeGroup.media_files)[0] : '',
+                                                                    status: 'approved'
+                                                                })
+                                                                toast.success(`Đã phê duyệt bài viết cho ${page.page_name}`)
+                                                            }}
+                                                        >
+                                                            Duyệt & Đặt lịch
+                                                        </Button>
+                                                    </div>
                                                 </div>
-                                                <Select onValueChange={(v) => window.ipcRenderer.generateCTA({ promptId: Number(selectedPromptId), productId: Number(v) }).then(res => setGeneratedResult({...generatedResult, comment: res}))}>
-                                                    <SelectTrigger className="w-[200px] h-9 bg-surface-low border-none rounded-lg text-xs">
-                                                        <SelectValue placeholder="Chọn sản phẩm gắn kèm..." />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        <SelectGroup>
-                                                            <SelectLabel>Sản phẩm Affiliate</SelectLabel>
-                                                            {products.map(p => <SelectItem key={p.id} value={p.id.toString()}>{p.name}</SelectItem>)}
-                                                        </SelectGroup>
-                                                    </SelectContent>
-                                                </Select>
-                                            </div>
-                                            {generatedResult.comment && (
-                                                <div className="p-4 bg-sky-50 text-sky-900 rounded-2xl text-xs italic border border-sky-100 animate-in slide-in-from-top-2">
-                                                    {generatedResult.comment}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </div>
-                                </Card>
+                                            </Card>
+                                        )
+                                    })}
+                                </div>
                             ) : (
                                 <Card className="border-none shadow-none bg-surface-lowest/40 border-2 border-dashed border-border/10 rounded-[2.5rem] p-12 min-h-[500px] flex flex-col items-center justify-center text-center">
                                     <div className="w-20 h-20 bg-surface-container-low rounded-full flex items-center justify-center mb-6 text-muted-foreground/20">

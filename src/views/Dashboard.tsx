@@ -18,12 +18,6 @@ import instagramLogo from '@/assets/instagram.svg'
 import zaloLogo from '@/assets/zalo.svg'
 import shopeeLogo from '@/assets/shopee.svg'
 
-const DISTRIBUTION = [
-  { platform: 'Facebook', reach: 18, color: 'bg-blue-600', width: 'w-3/4' },
-  { platform: 'Instagram', reach: 22, color: 'bg-pink-600', width: 'w-full' },
-  { platform: 'TikTok', reach: 5, color: 'bg-black', width: 'w-1/4' },
-]
-
 export const Dashboard: React.FC = () => {
   const [stats, setStats] = useState({
     projects: 0,
@@ -31,6 +25,13 @@ export const Dashboard: React.FC = () => {
     pendingPosts: 0
   })
   const [posts, setPosts] = useState<any[]>([])
+  const distribution = Object.entries(
+    posts.reduce((acc: Record<string, number>, p: any) => {
+      const key = (p.platform || 'Unknown').toString()
+      acc[key] = (acc[key] || 0) + 1
+      return acc
+    }, {})
+  ).map(([platform, count]) => ({ platform, reach: count as number }))
 
   const fetchData = async () => {
     if (!window.ipcRenderer) return
@@ -133,13 +134,14 @@ export const Dashboard: React.FC = () => {
                   </div>
                   <div className="flex items-center gap-3">
                     <span className={cn(
-                      "text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full",
-                      item.status === 'published' ? "bg-emerald-50 text-emerald-600" : 
-                      item.status === 'failed' ? "bg-rose-50 text-rose-600" :
-                      "bg-amber-50 text-amber-600"
+                      "text-[10px] font-black uppercase tracking-widest px-3 py-1 rounded-full shadow-sm border",
+                      item.status === 'published' || item.status === 'completed' ? "bg-emerald-50 text-emerald-600 border-emerald-100" : 
+                      item.status === 'failed' ? "bg-red-50 text-red-600 border-red-100" :
+                      item.status === 'scheduled' ? "bg-sky-50 text-sky-600 border-sky-100" :
+                      "bg-amber-50 text-amber-600 border-amber-100"
                     )}>
-                      {item.status === 'published' ? 'Đã đăng' : 
-                       item.status === 'failed' ? 'Thất bại' : 
+                      {item.status === 'published' || item.status === 'completed' ? 'Đã đăng' : 
+                       item.status === 'failed' ? 'Gặp lỗi' : 
                        item.status === 'scheduled' ? 'Đã lên lịch' : 
                        'Đang chờ'}</span>
                     <MoreHorizontal className="w-5 h-5 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer" />
@@ -167,14 +169,14 @@ export const Dashboard: React.FC = () => {
             <div className="relative z-10 space-y-6">
               <h3 className="font-display font-bold text-base">Phân bổ nền tảng nội dung</h3>
               <div className="space-y-4">
-                {DISTRIBUTION.map((d, i) => (
+                {distribution.map((d, i) => (
                   <div key={i} className="space-y-1.5">
                     <div className="flex justify-between text-xs font-bold uppercase tracking-widest opacity-80">
                       <span>{d.platform}</span>
                       <span>{d.reach}</span>
                     </div>
                     <div className="h-1.5 w-full bg-white/20 rounded-full overflow-hidden">
-                      <div className={cn("h-full bg-white rounded-full", d.width)} />
+                      <div className="h-full bg-white rounded-full" style={{ width: `${Math.max(10, Math.round((d.reach / Math.max(1, posts.length)) * 100))}%` }} />
                     </div>
                   </div>
                 ))}
@@ -189,9 +191,9 @@ export const Dashboard: React.FC = () => {
             <h3 className="font-display font-bold">Trạng thái kết nối</h3>
             <div className="space-y-4">
               {[
-                { label: 'Ổn định', count: 38, color: 'bg-emerald-500' },
-                { label: 'Cần chú ý', count: 4, color: 'bg-amber-500' },
-                { label: 'Mất kết nối', count: 3, color: 'bg-red-500' },
+                { label: 'Published', count: posts.filter((p: any) => p.status === 'published').length, color: 'bg-emerald-500' },
+                { label: 'Scheduled', count: posts.filter((p: any) => p.status === 'scheduled').length, color: 'bg-amber-500' },
+                { label: 'Failed', count: posts.filter((p: any) => p.status === 'failed').length, color: 'bg-red-500' },
               ].map((h, i) => (
                 <div key={i} className="flex items-center justify-between group cursor-pointer p-2 rounded-xl hover:bg-surface-low transition-colors">
                   <div className="flex items-center gap-3">
